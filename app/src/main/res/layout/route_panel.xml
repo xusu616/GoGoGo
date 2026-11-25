@@ -1,0 +1,28 @@
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/route_panel" android:layout_width="match_parent"
+    android:layout_height="wrap_content" android:orientation="vertical"
+    android:padding="8dp" android:background="#F2FFFFFF" android:elevation="8dp"
+    android:visibility="gone">
+    <TextView android:id="@+id/route_status" android:layout_width="match_parent"
+        android:layout_height="wrap_content" android:textColor="#263238"
+        android:textSize="14sp" android:accessibilityLiveRegion="polite" />
+    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content">
+        <Button android:id="@+id/route_confirm" android:layout_width="0dp"
+            android:layout_weight="1" android:layout_height="48dp" android:text="@string/route_confirm" />
+        <Button android:id="@+id/route_undo" android:layout_width="0dp"
+            android:layout_weight="1" android:layout_height="48dp" android:text="@string/route_undo" />
+        <Button android:id="@+id/route_saved" android:layout_width="0dp"
+            android:layout_weight="1" android:layout_height="48dp" android:text="@string/route_saved" />
+    </LinearLayout>
+    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content">
+        <TextView android:layout_width="wrap_content" android:layout_height="48dp"
+            android:gravity="center_vertical" android:text="@string/route_speed" android:labelFor="@id/route_speed_value" />
+        <EditText android:id="@+id/route_speed_value" android:layout_width="0dp"
+            android:layout_weight="1" android:layout_height="48dp" android:inputType="numberDecimal"
+            android:singleLine="true" android:selectAllOnFocus="true" android:text="1.2" />
+        <Button android:id="@+id/route_play" android:layout_width="0dp"
+            android:layout_weight="1" android:layout_height="48dp" android:text="@string/route_play" />
+        <Button android:id="@+id/route_stop" android:layout_width="0dp"
+            android:layout_weight="1" android:layout_height="48dp" android:text="@string/route_stop" />
+    </LinearLayout>
+</LinearLayout>

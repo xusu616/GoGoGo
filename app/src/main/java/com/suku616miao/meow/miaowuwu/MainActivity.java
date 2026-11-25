@@ -20,6 +20,8 @@ import android.hardware.SensorManager;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.IBinder;
+import android.os.Handler;
+import android.os.Looper;
 import android.provider.Settings;
 import android.text.TextUtils;
 import android.view.Gravity;
@@ -64,6 +66,7 @@ import com.baidu.mapapi.map.MapStatusUpdate;
 import com.baidu.mapapi.map.MapStatusUpdateFactory;
 import com.baidu.mapapi.map.MapView;
 import com.baidu.mapapi.map.MarkerOptions;
+import com.baidu.mapapi.map.Marker;
 import com.baidu.mapapi.map.MyLocationConfiguration;
 import com.baidu.mapapi.map.MyLocationData;
 import com.baidu.mapapi.model.LatLng;
@@ -86,6 +89,8 @@ import org.json.JSONObject;
 
 import java.io.File;
 import java.io.IOException;
+import java.net.URI;
+import java.net.URISyntaxException;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -97,6 +102,8 @@ import com.suku616miao.meow.miaowuwu.database.DataBaseHistorySearch;
 import com.suku616miao.meow.miaowuwu.utils.ShareUtils;
 import com.suku616miao.meow.miaowuwu.utils.GoUtils;
 import com.suku616miao.meow.miaowuwu.utils.MapUtils;
+import com.suku616miao.meow.miaowuwu.route.RouteEditor;
+import com.suku616miao.meow.miaowuwu.route.RoutePoint;
 
 import com.elvishew.xlog.XLog;
 
@@ -144,7 +151,27 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
     private float mCurrentDirection = 0.0f;
     private boolean isFirstLoc = true; // 是否首次定位
     private boolean isMockServStart = false;
+    private boolean mIsServiceBound = false;
     private ServiceGo.ServiceGoBinder mServiceBinder;
+    private RouteEditor mRouteEditor;
+    private static Marker mSelectedMarker;
+    private final Handler mRouteUiHandler = new Handler(Looper.getMainLooper());
+    private List<RoutePoint> mPendingRoute;
+    private double mPendingRouteSpeed;
+    private int mLastRouteState = ServiceGo.ROUTE_NONE;
+    private final Runnable mRouteStatusPoll = new Runnable() {
+        @Override
+        public void run() {
+            if (mServiceBinder != null) {
+                int state = mServiceBinder.getRouteState();
+                if (state != mLastRouteState) {
+                    mLastRouteState = state;
+                    mRouteEditor.setPlaybackState(state);
+                }
+            }
+            mRouteUiHandler.postDelayed(this, 250);
+        }
+    };
     private ServiceConnection mConnection;
     private FloatingActionButton mButtonStart;
     /*============================== 历史记录 相关 ==============================*/
@@ -193,17 +220,67 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
 
         initGoBtn();
 
+        initRouteEditor();
+
         mConnection = new ServiceConnection() {
             @Override
             public void onServiceConnected(ComponentName name, IBinder service) {
                 mServiceBinder = (ServiceGo.ServiceGoBinder)service;
+                if (mPendingRoute != null) {
+                    mServiceBinder.startRoute(mPendingRoute, mPendingRouteSpeed, getConfiguredAltitude());
+                    mPendingRoute = null;
+                } else {
+                    mLastRouteState = mServiceBinder.getRouteState();
+                    mRouteEditor.setPlaybackState(mLastRouteState);
+                }
+                mRouteUiHandler.removeCallbacks(mRouteStatusPoll);
+                mRouteUiHandler.post(mRouteStatusPoll);
             }
 
             @Override
             public void onServiceDisconnected(ComponentName name) {
-
+                mServiceBinder = null;
+                mPendingRoute = null;
+                mRouteUiHandler.removeCallbacks(mRouteStatusPoll);
+                mRouteEditor.setPlaybackState(ServiceGo.ROUTE_NONE);
+                isMockServStart = false;
+                if (mIsServiceBound) {
+                    unbindService(mConnection);
+                    mIsServiceBound = false;
+                }
+                mButtonStart.setImageResource(R.drawable.ic_position);
             }
         };
+
+        if (savedInstanceState != null) {
+            double[] center = savedInstanceState.getDoubleArray("map_center");
+            if (center != null) {
+                mBaiduMap.setMapStatus(MapStatusUpdateFactory.newMapStatus(new MapStatus.Builder()
+                        .target(new LatLng(center[0], center[1]))
+                        .zoom(savedInstanceState.getFloat("map_zoom")).build()));
+            }
+            if (savedInstanceState.getBoolean("route_editor_open")) mRouteEditor.toggle();
+            double[] pending = savedInstanceState.getDoubleArray("pending_route");
+            if (pending != null) {
+                mPendingRoute = new ArrayList<>();
+                for (int index = 0; index < pending.length; index += 2) {
+                    mPendingRoute.add(new RoutePoint(pending[index], pending[index + 1]));
+                }
+                mPendingRouteSpeed = savedInstanceState.getDouble("pending_route_speed");
+            }
+            if (savedInstanceState.getBoolean("mock_running")) {
+                // Reconnect to the existing service; never resend its starting coordinate on rotation.
+                mIsServiceBound = bindService(new Intent(this, ServiceGo.class), mConnection, 0);
+                isMockServStart = mIsServiceBound;
+                if (mIsServiceBound) {
+                    mRouteEditor.setConnecting();
+                    mButtonStart.setImageResource(R.drawable.ic_fly);
+                } else {
+                    mPendingRoute = null;
+                    GoUtils.DisplayToast(this, getString(R.string.route_service_ended));
+                }
+            }
+        }
 
         initStoreHistory();
 
@@ -243,8 +320,15 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
     protected void onDestroy() {
         XLog.i("MainActivity: onDestroy");
 
-        if (isMockServStart) {
+        mRouteUiHandler.removeCallbacks(mRouteStatusPoll);
+        mRouteEditor.destroy();
+        mSelectedMarker = null;
+
+        if (mIsServiceBound) {
             unbindService(mConnection); // 解绑服务，服务要记得解绑，不要造成内存泄漏
+            mIsServiceBound = false;
+        }
+        if (isMockServStart && !isChangingConfigurations()) {
             Intent serviceGoIntent = new Intent(MainActivity.this, ServiceGo.class);
             stopService(serviceGoIntent);
         }
@@ -266,6 +350,25 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
         mSearchHistoryDB.close();
 
         super.onDestroy();
+    }
+
+    @Override
+    protected void onSaveInstanceState(@NonNull Bundle state) {
+        MapStatus mapStatus = mBaiduMap.getMapStatus();
+        state.putDoubleArray("map_center", new double[] {mapStatus.target.latitude, mapStatus.target.longitude});
+        state.putFloat("map_zoom", mapStatus.zoom);
+        state.putBoolean("route_editor_open", mRouteEditor.isOpen());
+        state.putBoolean("mock_running", isMockServStart);
+        if (mPendingRoute != null) {
+            double[] pending = new double[mPendingRoute.size() * 2];
+            for (int index = 0; index < mPendingRoute.size(); index++) {
+                pending[index * 2] = mPendingRoute.get(index).getLatitude();
+                pending[index * 2 + 1] = mPendingRoute.get(index).getLongitude();
+            }
+            state.putDoubleArray("pending_route", pending);
+            state.putDouble("pending_route_speed", mPendingRouteSpeed);
+        }
+        super.onSaveInstanceState(state);
     }
 
     @Override
@@ -338,7 +441,7 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
                     contentValues.put(DataBaseHistorySearch.DB_COLUMN_TIMESTAMP, System.currentTimeMillis() / 1000);
 
                     DataBaseHistorySearch.saveHistorySearch(mSearchHistoryDB, contentValues);
-                    mBaiduMap.clear();
+                    clearSelectedMarker();
                     mSearchLayout.setVisibility(View.INVISIBLE);
                 } catch (Exception e) {
                     GoUtils.DisplayToast(MainActivity.this, getResources().getString(R.string.app_error_search));
@@ -381,6 +484,15 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
         });
 
         return true;
+    }
+
+    @Override
+    public boolean onOptionsItemSelected(@NonNull MenuItem item) {
+        if (item.getItemId() == R.id.action_route) {
+            mRouteEditor.toggle();
+            return true;
+        }
+        return super.onOptionsItemSelected(item);
     }
 
     @Override
@@ -461,6 +573,19 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
         mBaiduMap = mMapView.getMap();
         mBaiduMap.setMapType(BaiduMap.MAP_TYPE_NORMAL);
         mBaiduMap.setMyLocationEnabled(true);
+        mSelectedMarker = null;
+        mBaiduMap.setOnMapStatusChangeListener(new BaiduMap.OnMapStatusChangeListener() {
+            @Override public void onMapStatusChangeStart(MapStatus status) {
+                if (mRouteEditor != null) mRouteEditor.onMapMoveStarted();
+            }
+            @Override public void onMapStatusChangeStart(MapStatus status, int reason) {
+                if (mRouteEditor != null) mRouteEditor.onMapMoveStarted();
+            }
+            @Override public void onMapStatusChange(MapStatus status) { }
+            @Override public void onMapStatusChangeFinish(MapStatus status) {
+                if (mRouteEditor != null) mRouteEditor.onMapMoveFinished(status);
+            }
+        });
         mBaiduMap.setOnMapTouchListener(event -> {
 
         });
@@ -470,6 +595,10 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
              */
             @Override
             public void onMapClick(LatLng point) {
+                if (mRouteEditor.isOpen()) {
+                    mRouteEditor.selectCandidate(point);
+                    return;
+                }
                 mMarkLatLngMap = point;
                 markMap();
             }
@@ -478,6 +607,10 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
              */
             @Override
             public void onMapPoiClick(MapPoi poi) {
+                if (mRouteEditor.isOpen()) {
+                    mRouteEditor.selectCandidate(poi.getPosition());
+                    return;
+                }
                 mMarkLatLngMap = poi.getPosition();
                 markMap();
             }
@@ -488,6 +621,10 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
              */
             @Override
             public void onMapLongClick(LatLng point) {
+                if (mRouteEditor.isOpen()) {
+                    mRouteEditor.selectCandidate(point);
+                    return;
+                }
                 mMarkLatLngMap = point;
                 markMap();
                 mGeoCoder.reverseGeoCode(new ReverseGeoCodeOption().location(point));
@@ -714,7 +851,7 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
                             if (rbBD.isChecked()) {
                                 mMarkLatLngMap = new LatLng(dialog_lat_double, dialog_lng_double);
                             } else {
-                                double[] bdLonLat = MapUtils.wgs2bd09(dialog_lat_double, dialog_lng_double);
+                                double[] bdLonLat = MapUtils.wgs2bd09(dialog_lng_double, dialog_lat_double);
                                 mMarkLatLngMap = new LatLng(bdLonLat[1], bdLonLat[0]);
                             }
                             mMarkName = "手动输入的坐标";
@@ -737,15 +874,35 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
 
     //标定选择的位置
     private void markMap() {
+        if (mMarkLatLngMap == null) return;
+        if (mRouteEditor.isOpen()) {
+            mRouteEditor.selectCandidate(mMarkLatLngMap);
+            return;
+        }
         if (mMarkLatLngMap != null) {
-            MarkerOptions ooA = new MarkerOptions().position(mMarkLatLngMap).icon(mMapIndicator);
-            mBaiduMap.clear();
-            mBaiduMap.addOverlay(ooA);
+            updateSelectedMarker();
         }
     }
 
+    private static void updateSelectedMarker() {
+        if (mSelectedMarker == null) {
+            mSelectedMarker = (Marker) mBaiduMap.addOverlay(
+                    new MarkerOptions().position(mMarkLatLngMap).icon(mMapIndicator));
+        } else {
+            mSelectedMarker.setPosition(mMarkLatLngMap);
+        }
+    }
+
+    private static void clearSelectedMarker() {
+        if (mSelectedMarker != null) {
+            mSelectedMarker.remove();
+            mSelectedMarker = null;
+        }
+        mBaiduMap.hideInfoWindow();
+    }
+
     private void resetMap() {
-        mBaiduMap.clear();
+        clearSelectedMarker();
         mMarkLatLngMap = null;
 
         MyLocationData locData = new MyLocationData.Builder()
@@ -768,9 +925,7 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
             if (!bd09Longitude.isEmpty() && !bd09Latitude.isEmpty()) {
                 mMarkName = name;
                 mMarkLatLngMap = new LatLng(Double.parseDouble(bd09Latitude), Double.parseDouble(bd09Longitude));
-                MarkerOptions ooA = new MarkerOptions().position(mMarkLatLngMap).icon(mMapIndicator);
-                mBaiduMap.clear();
-                mBaiduMap.addOverlay(ooA);
+                updateSelectedMarker();
                 MapStatusUpdate mapstatusupdate = MapStatusUpdateFactory.newLatLng(mMarkLatLngMap);
                 mBaiduMap.setMapStatus(mapstatusupdate);
             }
@@ -787,29 +942,106 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
         mButtonStart.setOnClickListener(this::doGoLocation);
     }
 
-    private void startGoLocation() {
-        Intent serviceGoIntent = new Intent(MainActivity.this, ServiceGo.class);
-        bindService(serviceGoIntent, mConnection, BIND_AUTO_CREATE);    // 绑定服务和活动，之后活动就可以去调服务的方法了
-        double[] latLng = MapUtils.bd2wgs(mMarkLatLngMap.longitude, mMarkLatLngMap.latitude);
-        serviceGoIntent.putExtra(LNG_MSG_ID, latLng[0]);
-        serviceGoIntent.putExtra(LAT_MSG_ID, latLng[1]);
-        double alt = Double.parseDouble(sharedPreferences.getString("setting_altitude", "55.0"));
-        serviceGoIntent.putExtra(ALT_MSG_ID, alt);
+    private void initRouteEditor() {
+        mRouteEditor = new RouteEditor(this, mBaiduMap, findViewById(R.id.route_panel),
+                findViewById(R.id.route_crosshair), new RouteEditor.Listener() {
+            @Override public void onEditorVisibilityChanged(boolean visible) {
+                mButtonStart.setVisibility(visible ? View.GONE : View.VISIBLE);
+                if (visible) {
+                    // Location fixes must not move the camera while the user chooses a route vertex.
+                    isFirstLoc = false;
+                    clearSelectedMarker();
+                    mMarkLatLngMap = null;
+                }
+            }
+            @Override public boolean onStartRoute(List<RoutePoint> points, double speed) {
+                if (!GoUtils.isGpsOpened(MainActivity.this)) {
+                    GoUtils.showEnableGpsDialog(MainActivity.this);
+                    return false;
+                }
+                if (!Settings.canDrawOverlays(getApplicationContext())) {
+                    GoUtils.showEnableFloatWindowDialog(MainActivity.this);
+                    return false;
+                }
+                if (!GoUtils.isAllowMockLocation(MainActivity.this)) {
+                    GoUtils.showEnableMockLocationDialog(MainActivity.this);
+                    return false;
+                }
+                if (isMockServStart) {
+                    if (mServiceBinder == null) {
+                        mPendingRoute = new ArrayList<>(points);
+                        mPendingRouteSpeed = speed;
+                    } else {
+                        mServiceBinder.startRoute(points, speed, getConfiguredAltitude());
+                    }
+                } else {
+                    mPendingRoute = new ArrayList<>(points);
+                    mPendingRouteSpeed = speed;
+                    RoutePoint first = points.get(0);
+                    if (!startMockService(first.getLongitude(), first.getLatitude(), getConfiguredAltitude())) {
+                        mPendingRoute = null;
+                        return false;
+                    }
+                }
+                return true;
+            }
+            @Override public void onPauseRoute() { mServiceBinder.pauseRoute(); }
+            @Override public void onResumeRoute() { mServiceBinder.resumeRoute(); }
+            @Override public void onStopRoute() {
+                mPendingRoute = null;
+                stopGoLocation();
+                mRouteEditor.setPlaybackState(ServiceGo.ROUTE_NONE);
+            }
+        });
+    }
 
-        startForegroundService(serviceGoIntent);
+    private double getConfiguredAltitude() {
+        return Double.parseDouble(sharedPreferences.getString("setting_altitude", "55.0"));
+    }
+
+    private boolean startMockService(double longitude, double latitude, double altitude) {
+        Intent intent = new Intent(MainActivity.this, ServiceGo.class);
+        intent.putExtra(LNG_MSG_ID, longitude);
+        intent.putExtra(LAT_MSG_ID, latitude);
+        intent.putExtra(ALT_MSG_ID, altitude);
+        startForegroundService(intent);
+        mIsServiceBound = bindService(intent, mConnection, BIND_AUTO_CREATE);
+        isMockServStart = mIsServiceBound;
+        if (!mIsServiceBound) {
+            stopService(intent);
+            GoUtils.DisplayToast(this, getString(R.string.route_service_ended));
+            return false;
+        }
+        mButtonStart.setImageResource(R.drawable.ic_fly);
+        return true;
+    }
+
+    private void startGoLocation() {
+        double[] latLng = MapUtils.bd2wgs(mMarkLatLngMap.longitude, mMarkLatLngMap.latitude);
+        startMockService(latLng[0], latLng[1], getConfiguredAltitude());
         XLog.d("startForegroundService: ServiceGo");
 
-        isMockServStart = true;
     }
 
     private void stopGoLocation() {
-        unbindService(mConnection); // 解绑服务，服务要记得解绑，不要造成内存泄漏
+        mRouteUiHandler.removeCallbacks(mRouteStatusPoll);
+        mServiceBinder = null;
+        mLastRouteState = ServiceGo.ROUTE_NONE;
+        if (mIsServiceBound) {
+            unbindService(mConnection);
+            mIsServiceBound = false;
+        }
         Intent serviceGoIntent = new Intent(MainActivity.this, ServiceGo.class);
         stopService(serviceGoIntent);
         isMockServStart = false;
+        mButtonStart.setImageResource(R.drawable.ic_position);
     }
 
     private void doGoLocation(View v) {
+        if (mRouteEditor.isOpen()) {
+            GoUtils.DisplayToast(this, getString(R.string.route_stop_before_edit));
+            return;
+        }
         if (!GoUtils.isNetworkAvailable(this)) {
             GoUtils.DisplayToast(this, getResources().getString(R.string.app_error_network));
             return;
@@ -841,7 +1073,7 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
 
                 recordCurrentLocation(mMarkLatLngMap.longitude, mMarkLatLngMap.latitude);
 
-                mBaiduMap.clear();
+                clearSelectedMarker();
                 mMarkLatLngMap = null;
 
                 if (GoUtils.isWifiEnabled(MainActivity.this)) {
@@ -863,7 +1095,7 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
                             .setAction("Action", null).show();
 
                     recordCurrentLocation(mMarkLatLngMap.longitude, mMarkLatLngMap.latitude);
-                    mBaiduMap.clear();
+                    clearSelectedMarker();
                     mMarkLatLngMap = null;
 
                     if (GoUtils.isWifiEnabled(MainActivity.this)) {
@@ -1164,7 +1396,7 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
     }
 
     private void checkUpdateVersion(boolean result) {
-        String mapApiUrl = "https://api.github.com/repos/zcshou/gogogo/releases/latest";
+        String mapApiUrl = "https://api.github.com/repos/xusu616/GoGoGo/releases/latest";
 
         okhttp3.Request request = new okhttp3.Request.Builder().url(mapApiUrl).get().build();
         final Call call = mOkHttpClient.newCall(request);
@@ -1177,51 +1409,57 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
 
             @Override
             public void onResponse(@NonNull Call call, @NonNull okhttp3.Response response) throws IOException {
-                if (!response.isSuccessful()) {
-                    XLog.i("GitHub 更新检测响应失败(" + response.code() + ")，尝试 GitLab fallback");
-                    checkUpdateVersionGitLab(result);
-                    return;
-                }
-                ResponseBody responseBody = response.body();
-                if (responseBody == null) {
-                    XLog.i("GitHub 返回空数据，尝试 GitLab fallback");
-                    checkUpdateVersionGitLab(result);
-                    return;
-                }
-                String resp = responseBody.string();
-                // 注意，该请求在子线程，不能直接操作界面
-                runOnUiThread(() -> {
-                    try {
-                        JSONObject getRetJson = new JSONObject(resp);
-                        String curVersion = GoUtils.getVersionName(MainActivity.this);
-
-                        if (curVersion != null
-                                && (!getRetJson.getString("name").contains(curVersion)
-                                || !getRetJson.getString("tag_name").contains(curVersion))) {
-                            /* 这里用来保存下载地址 */
-                            JSONArray jsonArray = new JSONArray(getRetJson.getString("assets"));
-                            JSONObject jsonObject = jsonArray.getJSONObject(0);
-                            String download_url = jsonObject.getString("browser_download_url");
-                            String filename = jsonObject.getString("name");
-
-                            showUpdateDialog(
-                                    getRetJson.getString("name"),
-                                    getRetJson.getString("created_at"),
-                                    getRetJson.getString("target_commitish"),
-                                    getRetJson.getString("body"),
-                                    download_url,
-                                    filename
-                            );
-                        } else {
-                            if (result) {
-                                GoUtils.DisplayToast(MainActivity.this, getResources().getString(R.string.update_last));
-                            }
-                        }
-                    } catch (JSONException e) {
-                        XLog.e("ERROR: resolve json");
+                try (response) {
+                    if (!response.isSuccessful()) {
+                        XLog.i("GitHub 更新检测响应失败(" + response.code() + ")，尝试 GitLab fallback");
                         checkUpdateVersionGitLab(result);
+                        return;
                     }
-                });
+                    ResponseBody responseBody = response.body();
+                    if (responseBody == null) {
+                        XLog.i("GitHub 返回空数据，尝试 GitLab fallback");
+                        checkUpdateVersionGitLab(result);
+                        return;
+                    }
+                    String resp = responseBody.string();
+                    // 注意，该请求在子线程，不能直接操作界面
+                    runOnUiThread(() -> {
+                        try {
+                            JSONObject getRetJson = new JSONObject(resp);
+                            String curVersion = GoUtils.getVersionName(MainActivity.this);
+
+                            if (curVersion != null
+                                    && (!getRetJson.getString("name").contains(curVersion)
+                                    || !getRetJson.getString("tag_name").contains(curVersion))) {
+                                JSONArray jsonArray = getRetJson.getJSONArray("assets");
+                                JSONObject jsonObject = findApkAsset(jsonArray, "browser_download_url");
+                                if (jsonObject == null) {
+                                    XLog.i("GitHub 发布没有有效的 HTTPS APK 附件，尝试 GitLab fallback");
+                                    checkUpdateVersionGitLab(result);
+                                    return;
+                                }
+                                String download_url = jsonObject.getString("browser_download_url");
+                                String filename = jsonObject.getString("name");
+
+                                showUpdateDialog(
+                                        getRetJson.getString("name"),
+                                        getRetJson.getString("created_at"),
+                                        getRetJson.getString("target_commitish"),
+                                        getRetJson.getString("body"),
+                                        download_url,
+                                        filename
+                                );
+                            } else {
+                                if (result) {
+                                    GoUtils.DisplayToast(MainActivity.this, getResources().getString(R.string.update_last));
+                                }
+                            }
+                        } catch (JSONException e) {
+                            XLog.e("ERROR: resolve json");
+                            checkUpdateVersionGitLab(result);
+                        }
+                    });
+                }
             }
         });
     }
@@ -1242,85 +1480,102 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
 
             @Override
             public void onResponse(@NonNull Call call, @NonNull okhttp3.Response response) throws IOException {
-                if (!response.isSuccessful()) {
-                    XLog.i("GitLab 更新检测响应失败: " + response.code());
-                    if (result) {
-                        runOnUiThread(() -> GoUtils.DisplayToast(MainActivity.this, "更新检测失败"));
-                    }
-                    return;
-                }
-                ResponseBody responseBody = response.body();
-                if (responseBody == null) {
-                    XLog.i("GitLab 返回空数据");
-                    if (result) {
-                        runOnUiThread(() -> GoUtils.DisplayToast(MainActivity.this, "更新检测失败"));
-                    }
-                    return;
-                }
-                String resp = responseBody.string();
-                runOnUiThread(() -> {
-                    try {
-                        JSONArray array = new JSONArray(resp);
-                        if (array.length() == 0) {
-                            if (result) {
-                                GoUtils.DisplayToast(MainActivity.this, getResources().getString(R.string.update_last));
-                            }
-                            return;
+                try (response) {
+                    if (!response.isSuccessful()) {
+                        XLog.i("GitLab 更新检测响应失败: " + response.code());
+                        if (result) {
+                            runOnUiThread(() -> GoUtils.DisplayToast(MainActivity.this, "更新检测失败"));
                         }
-                        JSONObject getRetJson = array.getJSONObject(0);
-                        String curVersion = GoUtils.getVersionName(MainActivity.this);
-                        String releaseName = getRetJson.optString("name");
-                        String tagName = getRetJson.optString("tag_name");
+                        return;
+                    }
+                    ResponseBody responseBody = response.body();
+                    if (responseBody == null) {
+                        XLog.i("GitLab 返回空数据");
+                        if (result) {
+                            runOnUiThread(() -> GoUtils.DisplayToast(MainActivity.this, "更新检测失败"));
+                        }
+                        return;
+                    }
+                    String resp = responseBody.string();
+                    runOnUiThread(() -> {
+                        try {
+                            JSONArray array = new JSONArray(resp);
+                            if (array.length() == 0) {
+                                if (result) {
+                                    GoUtils.DisplayToast(MainActivity.this, getResources().getString(R.string.update_last));
+                                }
+                                return;
+                            }
+                            JSONObject getRetJson = array.getJSONObject(0);
+                            String curVersion = GoUtils.getVersionName(MainActivity.this);
+                            String releaseName = getRetJson.optString("name");
+                            String tagName = getRetJson.optString("tag_name");
 
-                        if (curVersion != null
-                                && (!releaseName.contains(curVersion)
-                                || !tagName.contains(curVersion))) {
-                            String download_url = "";
-                            String filename = "";
-                            JSONObject assets = getRetJson.optJSONObject("assets");
-                            if (assets != null) {
-                                JSONArray links = assets.optJSONArray("links");
-                                if (links != null && links.length() > 0) {
-                                    JSONObject targetLink = links.getJSONObject(0);
-                                    for (int i = 0; i < links.length(); i++) {
-                                        JSONObject link = links.getJSONObject(i);
-                                        String name = link.optString("name");
-                                        String url = link.optString("url");
-                                        if (name.endsWith(".apk") || url.endsWith(".apk")) {
-                                            targetLink = link;
-                                            break;
-                                        }
+                            if (curVersion != null
+                                    && (!releaseName.contains(curVersion)
+                                    || !tagName.contains(curVersion))) {
+                                JSONObject assets = getRetJson.optJSONObject("assets");
+                                JSONArray links = assets != null ? assets.optJSONArray("links") : null;
+                                JSONObject targetLink = findApkAsset(links, "url");
+                                if (targetLink == null) {
+                                    XLog.i("GitLab 发布没有有效的 HTTPS APK 附件");
+                                    if (result) {
+                                        GoUtils.DisplayToast(MainActivity.this, "更新检测失败：发布中没有有效的 HTTPS APK 附件");
                                     }
-                                    download_url = targetLink.optString("url");
-                                    filename = targetLink.optString("name");
+                                    return;
+                                }
+                                String download_url = targetLink.getString("url");
+                                String filename = targetLink.getString("name");
+
+                                JSONObject commitObj = getRetJson.optJSONObject("commit");
+                                String commitStr = commitObj != null ? commitObj.optString("short_id") : "";
+
+                                showUpdateDialog(
+                                        releaseName,
+                                        getRetJson.optString("created_at"),
+                                        commitStr,
+                                        getRetJson.optString("description"),
+                                        download_url,
+                                        filename
+                                );
+                            } else {
+                                if (result) {
+                                    GoUtils.DisplayToast(MainActivity.this, getResources().getString(R.string.update_last));
                                 }
                             }
-
-                            JSONObject commitObj = getRetJson.optJSONObject("commit");
-                            String commitStr = commitObj != null ? commitObj.optString("short_id") : "";
-
-                            showUpdateDialog(
-                                    releaseName,
-                                    getRetJson.optString("created_at"),
-                                    commitStr,
-                                    getRetJson.optString("description"),
-                                    download_url,
-                                    filename
-                            );
-                        } else {
+                        } catch (JSONException e) {
+                            XLog.e("ERROR: resolve gitlab json");
                             if (result) {
-                                GoUtils.DisplayToast(MainActivity.this, getResources().getString(R.string.update_last));
+                                GoUtils.DisplayToast(MainActivity.this, "更新检测失败");
                             }
                         }
-                    } catch (JSONException e) {
-                        XLog.e("ERROR: resolve gitlab json");
-                        if (result) {
-                            GoUtils.DisplayToast(MainActivity.this, "更新检测失败");
-                        }
-                    }
-                });
+                    });
+                }
             }
         });
+    }
+
+    private JSONObject findApkAsset(JSONArray assets, String urlField) throws JSONException {
+        if (assets == null) {
+            return null;
+        }
+        for (int i = 0; i < assets.length(); i++) {
+            JSONObject asset = assets.getJSONObject(i);
+            String filename = asset.optString("name");
+            if (!filename.endsWith(".apk") || filename.contains("/") || filename.contains("\\")) {
+                continue;
+            }
+            try {
+                URI downloadUri = new URI(asset.optString(urlField));
+                if ("https".equalsIgnoreCase(downloadUri.getScheme())
+                        && !TextUtils.isEmpty(downloadUri.getHost())) {
+                    return asset;
+                }
+            } catch (URISyntaxException e) {
+                XLog.i("跳过下载地址格式错误的 APK 附件");
+            }
+        }
+        return null;
     }
 
     private void showUpdateDialog(String title, String createdAt, String commit, String body, String downloadUrl, String filename) {
@@ -1348,7 +1603,7 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
             Button updateCancel = window.findViewById(R.id.update_ignore);
             updateCancel.setOnClickListener(v -> alertDialog.cancel());
 
-            mUpdateFilename = TextUtils.isEmpty(filename) ? "GoGoGo.apk" : filename;
+            mUpdateFilename = filename;
 
             Button updateAgree = window.findViewById(R.id.update_agree);
             updateAgree.setOnClickListener(v -> {

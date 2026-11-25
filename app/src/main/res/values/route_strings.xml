@@ -1,0 +1,30 @@
+<resources>
+    <string name="route_menu">路线</string>
+    <string name="route_confirm">确认此点</string>
+    <string name="route_undo">撤销</string>
+    <string name="route_saved">保存/选择</string>
+    <string name="route_speed">速度(m/s)</string>
+    <string name="route_play">开始</string>
+    <string name="route_pause">暂停</string>
+    <string name="route_resume">继续</string>
+    <string name="route_stop">停止</string>
+    <string name="route_select_hint">拖动地图，将中心准星移到目标位置，再确认此点。</string>
+    <string name="route_summary">%1$d 个点 · %2$.0f 米</string>
+    <string name="route_wait_map">地图移动中，请停稳后确认。</string>
+    <string name="route_duplicate">此点已确认，请移动地图选择下一个点。</string>
+    <string name="route_need_points">请至少确认两个不同的位置。</string>
+    <string name="route_invalid_speed">请输入大于 0 的有效速度。</string>
+    <string name="route_running">路线播放中，选点已锁定。</string>
+    <string name="route_paused">路线已暂停，位置保持不变。</string>
+    <string name="route_finished">已到达终点。可重新开始或继续编辑。</string>
+    <string name="route_stop_before_edit">请先停止路线播放，再编辑或退出路线。</string>
+    <string name="route_save">保存当前路线</string>
+    <string name="route_name">路线名称</string>
+    <string name="route_empty_name">请输入路线名称。</string>
+    <string name="route_saved_ok">路线已保存。</string>
+    <string name="route_saved_bad">保存的路线数据无效，无法载入。</string>
+    <string name="route_delete">删除此路线</string>
+    <string name="route_new">新建路线</string>
+    <string name="route_crosshair">路线候选位置</string>
+    <string name="route_service_ended">模拟服务已结束，请重新开始。</string>
+</resources>
