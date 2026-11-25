@@ -1,6 +1,8 @@
-> 📦 **Release 下载提示**：请前往对应的 GitLab 仓库查看或下载 Release（GitHub 端暂不重复上传）👉 [https://gitlab.com/xusu616/GoGoGo/-/releases](https://gitlab.com/xusu616/GoGoGo/-/releases) （[GitLab 仓库主页](https://gitlab.com/xusu616/GoGoGo)）
+> 📦 **本仓库定制版下载**：[GitHub Releases](https://github.com/xusu616/GoGoGo/releases) · [GitLab Releases](https://gitlab.com/xusu616/GoGoGo/-/releases)
 
 # 影梭
+
+本仓库定制版 **1.13.0** 基于公开的 1.12.3 源码，保留独立包名和图标，增加逐点确认的手动路线、保存/选择路线以及连续播放、暂停和继续。[手动路线使用说明](docs/routes.md)。下文保留上游产品介绍；本仓库的实现范围和系统要求请查看对应 Release。
 
 影梭（VirtGO）是一款 Android 位置模拟应用，支持地图选点、位置搜索、坐标输入、线路移动和悬浮摇杆，并提供位置与线路的收藏、历史记录和 GPX 导入导出。“影”寓意位置的影子，“梭”寓意在位置与线路之间穿梭。
 
