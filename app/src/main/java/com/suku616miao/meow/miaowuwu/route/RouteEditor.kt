@@ -13,10 +13,13 @@ import androidx.appcompat.app.AlertDialog
 import com.baidu.mapapi.map.BaiduMap
 import com.baidu.mapapi.map.MapStatus
 import com.baidu.mapapi.map.MapStatusUpdateFactory
+import com.baidu.mapapi.map.Marker
+import com.baidu.mapapi.map.MarkerOptions
 import com.baidu.mapapi.map.Polyline
 import com.baidu.mapapi.map.PolylineOptions
 import com.baidu.mapapi.model.LatLng
 import com.suku616miao.meow.miaowuwu.R
+import com.suku616miao.meow.miaowuwu.MainActivity
 import com.suku616miao.meow.miaowuwu.service.ServiceGo
 import com.suku616miao.meow.miaowuwu.utils.MapUtils
 import org.json.JSONArray
@@ -49,6 +52,8 @@ class RouteEditor(
     private val play: Button = panel.findViewById(R.id.route_play)
     private val stop: Button = panel.findViewById(R.id.route_stop)
     private var polyline: Polyline? = null
+    private var firstMarker: Marker? = null
+    private var lastMarker: Marker? = null
     private var playbackState = ServiceGo.ROUTE_NONE
     private var starting = false
     var isOpen = false
@@ -106,6 +111,8 @@ class RouteEditor(
         panel.visibility = if (isOpen) View.VISIBLE else View.GONE
         crosshair.visibility = if (isOpen) View.VISIBLE else View.GONE
         polyline?.isVisible = isOpen
+        firstMarker?.isVisible = isOpen && draft.points.isNotEmpty()
+        lastMarker?.isVisible = isOpen && draft.points.size >= 2
         listener.onEditorVisibilityChanged(isOpen)
         if (isOpen) {
             if (!draft.isMapMoving) draft.finishMapMove(map.mapStatus.target.toRoutePoint())
@@ -164,6 +171,7 @@ class RouteEditor(
 
     private fun updatePolyline() {
         val points = draft.points.map { LatLng(it.latitude, it.longitude) }
+        updateNodeMarkers(points)
         if (points.size < 2) {
             // Keep the overlay for reuse when undo temporarily leaves one vertex.
             polyline?.isVisible = false
@@ -178,6 +186,29 @@ class RouteEditor(
                 currentLine.isVisible = isOpen
             }
         }
+    }
+
+    private fun updateNodeMarkers(points: List<LatLng>) {
+        if (points.isEmpty()) {
+            firstMarker?.isVisible = false
+            lastMarker?.isVisible = false
+            return
+        }
+        firstMarker = updateMarker(firstMarker, points.first())
+        if (points.size >= 2) {
+            lastMarker = updateMarker(lastMarker, points.last())
+        } else {
+            lastMarker?.isVisible = false
+        }
+    }
+
+    private fun updateMarker(existing: Marker?, point: LatLng): Marker {
+        val marker = existing ?: map.addOverlay(
+            MarkerOptions().position(point).icon(MainActivity.mMapIndicator)
+        ) as Marker
+        marker.position = point
+        marker.isVisible = isOpen
+        return marker
     }
 
     private fun updateControls() {
@@ -308,6 +339,10 @@ class RouteEditor(
 
     fun destroy() {
         polyline?.remove()
+        firstMarker?.remove()
+        lastMarker?.remove()
         polyline = null
+        firstMarker = null
+        lastMarker = null
     }
 }
