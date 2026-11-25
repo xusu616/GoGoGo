@@ -10,6 +10,8 @@
     <string name="route_stop">停止</string>
     <string name="route_select_hint">拖动地图，将中心准星移到目标位置，再确认此点。</string>
     <string name="route_summary">%1$d 个点 · %2$.0f 米</string>
+    <string name="route_status_text">%1$s\n%2$s</string>
+    <string name="route_default_speed" translatable="false">1.2</string>
     <string name="route_wait_map">地图移动中，请停稳后确认。</string>
     <string name="route_duplicate">此点已确认，请移动地图选择下一个点。</string>
     <string name="route_need_points">请至少确认两个不同的位置。</string>

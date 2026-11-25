@@ -191,7 +191,7 @@ class RouteEditor(
             draft.isMapMoving -> R.string.route_wait_map
             else -> R.string.route_select_hint
         }
-        status.text = "$summary\n${activity.getString(hint)}"
+        status.text = activity.getString(R.string.route_status_text, summary, activity.getString(hint))
         confirm.isEnabled = !isLocked && !draft.isMapMoving
         undo.isEnabled = !isLocked && points.isNotEmpty()
         saved.isEnabled = !isLocked
