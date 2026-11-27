@@ -105,4 +105,10 @@
             app:summary="@string/app_author"
             app:iconSpaceReserved="false"/>
     </PreferenceCategory>
+    <Preference
+        app:key="setting_modified_about"
+        app:title="@string/modified_build_about"
+        app:summary="@string/modified_build_about_summary"
+        app:persistent="false"
+        app:iconSpaceReserved="false" />
 </PreferenceScreen>

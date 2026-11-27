@@ -1,4 +1,4 @@
-> 📦 **本仓库定制版下载**：[GitHub Releases](https://github.com/xusu616/GoGoGo/releases) · [GitLab Releases](https://gitlab.com/xusu616/GoGoGo/-/releases)
+> 📦 **release**：[GitHub Releases](https://github.com/xusu616/GoGoGo/releases) · [GitLab Releases](https://gitlab.com/xusu616/GoGoGo/-/releases)
 
 # 影梭
 

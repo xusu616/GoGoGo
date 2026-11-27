@@ -9,6 +9,7 @@ import androidx.preference.Preference;
 import androidx.preference.PreferenceFragmentCompat;
 import com.suku616miao.meow.miaowuwu.ui.MaterialEditTextPreferenceDialogFragment;
 import com.suku616miao.meow.miaowuwu.ui.MaterialListPreferenceDialogFragment;
+import com.suku616miao.meow.miaowuwu.ui.ModifiedBuildAboutDialog;
 import com.suku616miao.meow.miaowuwu.utils.GoUtils;
 
 import java.util.Objects;
@@ -52,6 +53,11 @@ public class FragmentSettings extends PreferenceFragmentCompat {
     public void onCreatePreferences(Bundle savedInstanceState, String rootKey) {
         // Load the preferences from an XML resource
         addPreferencesFromResource(R.xml.preferences_main);
+        Preference modifiedAbout = findPreference("setting_modified_about");
+        modifiedAbout.setOnPreferenceClickListener(preference -> {
+            ModifiedBuildAboutDialog.show(requireContext());
+            return true;
+        });
 
         ListPreference pfJoystick = findPreference("setting_joystick_type");
         if (pfJoystick != null) {
