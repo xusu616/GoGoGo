@@ -1,18 +1,27 @@
 <resources>
+    <string name="route_changes_may_not_be_saved">改动可能未保存</string>
     <string name="route_menu">路线</string>
     <string name="route_confirm">确认此点</string>
     <string name="route_undo">撤销</string>
-    <string name="route_saved">保存/选择</string>
-    <string name="route_speed">速度(m/s)</string>
+    <string name="route_save_short">保存路线</string>
+    <string name="route_select">选择路线</string>
+    <string name="route_select_title">已保存路线（%1$d 条）</string>
+    <string name="route_no_saved_routes">还没有保存的路线，请先确认节点并保存。</string>
+    <string name="route_replace_playing">载入或新建路线会停止当前播放。</string>
+    <string name="route_load">载入</string>
+    <string name="route_overwrite_title">同名路线已存在</string>
+    <string name="route_overwrite_message">是否替换“%1$s”？其他路线会保留。</string>
+    <string name="route_overwrite">替换</string>
+    <string name="route_speed">速度（m/s）</string>
     <string name="route_play">开始</string>
     <string name="route_pause">暂停</string>
     <string name="route_resume">继续</string>
     <string name="route_stop">停止</string>
-    <string name="route_select_hint">拖动地图，将中心准星移到目标位置，再确认此点。</string>
+    <string name="route_select_hint">移动准星到目标，点击确认。手指可以不松开。</string>
     <string name="route_summary">%1$d 个点 · %2$.0f 米</string>
     <string name="route_status_text">%1$s\n%2$s</string>
     <string name="route_default_speed" translatable="false">1.2</string>
-    <string name="route_wait_map">地图移动中，请停稳后确认。</string>
+    <string name="route_wait_map">地图移动中，可随时确认当前准星位置。</string>
     <string name="route_duplicate">此点已确认，请移动地图选择下一个点。</string>
     <string name="route_need_points">请至少确认两个不同的位置。</string>
     <string name="route_invalid_speed">请输入大于 0 的有效速度。</string>

@@ -17,11 +17,16 @@ import android.hardware.Sensor;
 import android.hardware.SensorEvent;
 import android.hardware.SensorEventListener;
 import android.hardware.SensorManager;
+import android.location.Location;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.IBinder;
 import android.os.Handler;
 import android.os.Looper;
+import android.Manifest;
+import android.content.pm.PackageManager;
+import androidx.core.app.ActivityCompat;
+import androidx.core.content.ContextCompat;
 import android.provider.Settings;
 import android.text.TextUtils;
 import android.view.Gravity;
@@ -51,10 +56,6 @@ import androidx.core.view.GravityCompat;
 import androidx.drawerlayout.widget.DrawerLayout;
 import androidx.preference.PreferenceManager;
 
-import com.baidu.location.BDAbstractLocationListener;
-import com.baidu.location.BDLocation;
-import com.baidu.location.LocationClient;
-import com.baidu.location.LocationClientOption;
 import com.baidu.mapapi.SDKInitializer;
 import com.baidu.mapapi.map.BaiduMap;
 import com.baidu.mapapi.map.BitmapDescriptor;
@@ -104,6 +105,10 @@ import com.suku616miao.meow.miaowuwu.utils.GoUtils;
 import com.suku616miao.meow.miaowuwu.utils.MapUtils;
 import com.suku616miao.meow.miaowuwu.route.RouteEditor;
 import com.suku616miao.meow.miaowuwu.route.RoutePoint;
+import com.suku616miao.meow.miaowuwu.update.ReleaseVersion;
+import com.suku616miao.meow.miaowuwu.ui.AppNavigationController;
+import com.suku616miao.meow.miaowuwu.ui.ConsentFragment;
+import com.google.android.material.dialog.MaterialAlertDialogBuilder;
 
 import com.elvishew.xlog.XLog;
 
@@ -130,13 +135,20 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
 
     /*============================== 主界面地图 相关 ==============================*/
     /************** 地图 *****************/
-    public final static BitmapDescriptor mMapIndicator = BitmapDescriptorFactory.fromResource(R.drawable.icon_gcoding);
+    private BitmapDescriptor mMapIndicator;
     public static String mCurrentCity = null;
     private MapView mMapView;
-    private static BaiduMap mBaiduMap = null;
-    private static LatLng mMarkLatLngMap = new LatLng(36.547743718042415, 117.07018449827267); // 当前标记的地图点
-    private static String mMarkName = null;
+    private BaiduMap mBaiduMap;
+    private static final LatLng DEFAULT_MAP_CENTER = new LatLng(36.547743718042415, 117.07018449827267);
+    private LatLng mMarkLatLngMap;
+    private String mMarkName;
     private GeoCoder mGeoCoder;
+    private GeoCoder mLocationGeoCoder;
+    private Location mLastCityLookupAttempt;
+    private Location mLastRealLocation;
+    private boolean mCityLookupPending;
+    private boolean mCityLookupFailed;
+    private static final float CITY_REFRESH_DISTANCE_METERS = 1000f;
     private SensorManager mSensorManager;
     private Sensor mSensorAccelerometer;
     private Sensor mSensorMagnetic;
@@ -145,31 +157,34 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
     private final float[] mR = new float[9];//旋转矩阵，用来保存磁场和加速度的数据
     private final float[] mDirectionValues = new float[3];//模拟方向传感器的数据（原始数据为弧度）
     /************** 定位 *****************/
-    private LocationClient mLocClient = null;
+    private SystemLocationSource mRealLocationSource;
     private double mCurrentLat = 0.0;       // 当前位置的百度纬度
     private double mCurrentLon = 0.0;       // 当前位置的百度经度
     private float mCurrentDirection = 0.0f;
     private boolean isFirstLoc = true; // 是否首次定位
+    private boolean mHasLocation;
     private boolean isMockServStart = false;
     private boolean mIsServiceBound = false;
     private ServiceGo.ServiceGoBinder mServiceBinder;
     private RouteEditor mRouteEditor;
-    private static Marker mSelectedMarker;
+    private Marker mSelectedMarker;
     private final Handler mRouteUiHandler = new Handler(Looper.getMainLooper());
     private List<RoutePoint> mPendingRoute;
     private double mPendingRouteSpeed;
-    private int mLastRouteState = ServiceGo.ROUTE_NONE;
+    private boolean mPendingRouteRepeat;
+    private double[] mPendingPosition;
+    private boolean mInitialized;
+    private boolean mActivityResumed;
+    private AppNavigationController mNavigation;
+    private boolean mMapMenuVisible = true;
     private final Runnable mRouteStatusPoll = new Runnable() {
         @Override
         public void run() {
             if (mServiceBinder != null) {
-                int state = mServiceBinder.getRouteState();
-                if (state != mLastRouteState) {
-                    mLastRouteState = state;
-                    mRouteEditor.setPlaybackState(state);
-                }
+                if (handleSimulationFailure()) return;
+                mRouteEditor.updatePlayback(mServiceBinder.getRouteSnapshot());
             }
-            mRouteUiHandler.postDelayed(this, 250);
+            mRouteUiHandler.postDelayed(this, 100);
         }
     };
     private ServiceConnection mConnection;
@@ -194,16 +209,35 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        PreferenceManager.setDefaultValues(this, R.xml.preferences_main, false);
+        sharedPreferences = PreferenceManager.getDefaultSharedPreferences(this);
+        if (!sharedPreferences.getBoolean("KEY_ACCEPT_AGREEMENT", false) || !sharedPreferences.getBoolean("KEY_ACCEPT_PRIVACY", false)) {
+            setContentView(R.layout.consent_host);
+            if (savedInstanceState == null) getSupportFragmentManager().beginTransaction()
+                    .replace(R.id.consent_container, new ConsentFragment()).commit();
+            return;
+        }
+        initializeMain(savedInstanceState);
+    }
+
+    public void completeConsent() {
+        getSupportFragmentManager().beginTransaction().remove(getSupportFragmentManager().findFragmentById(R.id.consent_container)).commitNow();
+        initializeMain(null);
+    }
+
+    private void initializeMain(Bundle savedInstanceState) {
+        MockProviderLifecycle.restoreAfterProcessDeath(getApplicationContext());
+        SDKInitializer.setAgreePrivacy(getApplicationContext(), true);
+        SDKInitializer.setApiKey(BuildConfig.MAPS_API_KEY);
+        SDKInitializer.initialize(getApplicationContext());
+        SDKInitializer.setCoordType(com.baidu.mapapi.CoordType.BD09LL);
         setContentView(R.layout.activity_main);
+        mMapIndicator = BitmapDescriptorFactory.fromResource(R.drawable.icon_gcoding);
 
         Toolbar toolbar = findViewById(R.id.toolbar);
         setSupportActionBar(toolbar);
 
         DrawerLayout drawer = findViewById(R.id.drawer_layout);
-        ActionBarDrawerToggle toggle = new ActionBarDrawerToggle(
-                this, drawer, toolbar, R.string.nav_drawer_open, R.string.nav_drawer_close);
-        drawer.addDrawerListener(toggle);
-        toggle.syncState();
 
         XLog.i("MainActivity: onCreate");
 
@@ -221,18 +255,23 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
         initGoBtn();
 
         initRouteEditor();
+        mNavigation = new AppNavigationController(this);
+        mInitialized = true;
+        findViewById(R.id.route_button).setOnClickListener(v -> toggleRouteEditor());
 
         mConnection = new ServiceConnection() {
             @Override
             public void onServiceConnected(ComponentName name, IBinder service) {
                 mServiceBinder = (ServiceGo.ServiceGoBinder)service;
+                if (handleSimulationFailure()) return;
                 if (mPendingRoute != null) {
-                    mServiceBinder.startRoute(mPendingRoute, mPendingRouteSpeed, getConfiguredAltitude());
+                    mServiceBinder.startRoute(mPendingRoute, mPendingRouteSpeed, getConfiguredAltitude(), mPendingRouteRepeat);
                     mPendingRoute = null;
                 } else {
-                    mLastRouteState = mServiceBinder.getRouteState();
-                    mRouteEditor.setPlaybackState(mLastRouteState);
+                    mRouteEditor.setPlaybackState(mServiceBinder.getRouteState());
+                    mRouteEditor.updatePlayback(mServiceBinder.getRouteSnapshot());
                 }
+                if (mPendingPosition != null) applyPendingPosition();
                 mRouteUiHandler.removeCallbacks(mRouteStatusPoll);
                 mRouteUiHandler.post(mRouteStatusPoll);
             }
@@ -241,6 +280,7 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
             public void onServiceDisconnected(ComponentName name) {
                 mServiceBinder = null;
                 mPendingRoute = null;
+                mPendingPosition = null;
                 mRouteUiHandler.removeCallbacks(mRouteStatusPoll);
                 mRouteEditor.setPlaybackState(ServiceGo.ROUTE_NONE);
                 isMockServStart = false;
@@ -253,8 +293,16 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
         };
 
         if (savedInstanceState != null) {
+            double[] selected = savedInstanceState.getDoubleArray("selected_position");
+            if (selected != null) {
+                mMarkLatLngMap = new LatLng(selected[0], selected[1]);
+                mMarkName = savedInstanceState.getString("selected_position_name");
+                updateSelectedMarker();
+            }
+            mPendingPosition = savedInstanceState.getDoubleArray("pending_position");
             double[] center = savedInstanceState.getDoubleArray("map_center");
             if (center != null) {
+                isFirstLoc = false;
                 mBaiduMap.setMapStatus(MapStatusUpdateFactory.newMapStatus(new MapStatus.Builder()
                         .target(new LatLng(center[0], center[1]))
                         .zoom(savedInstanceState.getFloat("map_zoom")).build()));
@@ -267,6 +315,7 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
                     mPendingRoute.add(new RoutePoint(pending[index], pending[index + 1]));
                 }
                 mPendingRouteSpeed = savedInstanceState.getDouble("pending_route_speed");
+                mPendingRouteRepeat = savedInstanceState.getBoolean("pending_route_repeat");
             }
             if (savedInstanceState.getBoolean("mock_running")) {
                 // Reconnect to the existing service; never resend its starting coordinate on rotation.
@@ -277,6 +326,7 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
                     mButtonStart.setImageResource(R.drawable.ic_fly);
                 } else {
                     mPendingRoute = null;
+                    mPendingPosition = null;
                     GoUtils.DisplayToast(this, getString(R.string.route_service_ended));
                 }
             }
@@ -289,36 +339,60 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
         initUpdateVersion();
 
         checkUpdateVersion(false);
+        invalidateOptionsMenu();
+        mNavigation.onResume();
+        if (!mRealLocationSource.hasPermission()) {
+            ActivityCompat.requestPermissions(this, new String[] { Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION }, 127);
+        } else if (mActivityResumed) {
+            mRealLocationSource.start();
+        }
     }
 
     @Override
     protected void onPause() {
         XLog.i("MainActivity: onPause");
-        mMapView.onPause();
-        mSensorManager.unregisterListener(this);
+        mActivityResumed = false;
+        if (mInitialized) mRealLocationSource.stop();
+        if (mInitialized) { mMapView.onPause(); mSensorManager.unregisterListener(this); }
         super.onPause();
     }
 
     @Override
     protected void onResume() {
         XLog.i("MainActivity: onResume");
-        mMapView.onResume();
-        mSensorManager.registerListener(this, mSensorAccelerometer, SensorManager.SENSOR_DELAY_UI);
-        mSensorManager.registerListener(this, mSensorMagnetic, SensorManager.SENSOR_DELAY_UI);
+        mActivityResumed = true;
+        if (mInitialized) {
+            mRealLocationSource.start();
+            mMapView.onResume();
+            mSensorManager.registerListener(this, mSensorAccelerometer, SensorManager.SENSOR_DELAY_UI);
+            mSensorManager.registerListener(this, mSensorMagnetic, SensorManager.SENSOR_DELAY_UI);
+        }
         super.onResume();
+        if (mNavigation != null) mNavigation.onResume();
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions, @NonNull int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode == 127 && mInitialized && mActivityResumed) mRealLocationSource.start();
     }
 
     @Override
     protected void onStop() {
         XLog.i("MainActivity: onStop");
         //取消注册传感器监听
-        mSensorManager.unregisterListener(this);
+        if (mInitialized) mSensorManager.unregisterListener(this);
         super.onStop();
     }
 
     @Override
     protected void onDestroy() {
         XLog.i("MainActivity: onDestroy");
+        if (!mInitialized) { super.onDestroy(); return; }
+        mNavigation.destroy();
+        mOkHttpClient.dispatcher().cancelAll();
+        mGeoCoder.destroy();
+        mLocationGeoCoder.destroy();
 
         mRouteUiHandler.removeCallbacks(mRouteStatusPoll);
         mRouteEditor.destroy();
@@ -337,10 +411,12 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
         mSensorManager.unregisterListener(this);
 
         // 退出时销毁定位
-        mLocClient.stop();
+        mRealLocationSource.stop();
         // 关闭定位图层
         mBaiduMap.setMyLocationEnabled(false);
         mMapView.onDestroy();
+        mMapIndicator.recycle();
+        mMapView = null;
 
         //poi search destroy
         mSuggestionSearch.destroy();
@@ -354,11 +430,17 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
 
     @Override
     protected void onSaveInstanceState(@NonNull Bundle state) {
+        if (!mInitialized) { super.onSaveInstanceState(state); return; }
         MapStatus mapStatus = mBaiduMap.getMapStatus();
         state.putDoubleArray("map_center", new double[] {mapStatus.target.latitude, mapStatus.target.longitude});
         state.putFloat("map_zoom", mapStatus.zoom);
         state.putBoolean("route_editor_open", mRouteEditor.isOpen());
         state.putBoolean("mock_running", isMockServStart);
+        if (mMarkLatLngMap != null) {
+            state.putDoubleArray("selected_position", new double[] {mMarkLatLngMap.latitude, mMarkLatLngMap.longitude});
+            state.putString("selected_position_name", mMarkName);
+        }
+        if (mPendingPosition != null) state.putDoubleArray("pending_position", mPendingPosition);
         if (mPendingRoute != null) {
             double[] pending = new double[mPendingRoute.size() * 2];
             for (int index = 0; index < mPendingRoute.size(); index++) {
@@ -367,17 +449,22 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
             }
             state.putDoubleArray("pending_route", pending);
             state.putDouble("pending_route_speed", mPendingRouteSpeed);
+            state.putBoolean("pending_route_repeat", mPendingRouteRepeat);
         }
         super.onSaveInstanceState(state);
     }
 
-    @Override
-    public void onBackPressed() {
-        moveTaskToBack(false);
+    public boolean isRouteEditorOpen() { return mRouteEditor != null && mRouteEditor.isOpen(); }
+    public void toggleRouteEditor() { if (mRouteEditor != null) mRouteEditor.toggle(); }
+    public void setMapMenuVisible(boolean visible) { mMapMenuVisible = visible; invalidateOptionsMenu(); }
+    public void selectHistoryLocation(String name, String lng, String lat) {
+        mNavigation.navigate(R.id.map_destination);
+        showLocation(name, lng, lat);
     }
 
     @Override
     public boolean onCreateOptionsMenu(final Menu menu) {
+        if (!mInitialized || !mMapMenuVisible) return false;
         // Inflate the menu; this adds items to the action bar if it is present.
         getMenuInflater().inflate(R.menu.menu_main, menu);
         //找到searchView
@@ -428,6 +515,12 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
         searchView.setOnQueryTextListener(new SearchView.OnQueryTextListener() {
             @Override
             public boolean onQueryTextSubmit(String query) {
+                if (TextUtils.isEmpty(mCurrentCity)) {
+                    int message = mCityLookupFailed ? R.string.map_city_lookup_failed : R.string.map_city_unavailable;
+                    requestCurrentCity();
+                    GoUtils.DisplayToast(MainActivity.this, getString(message));
+                    return true;
+                }
                 try {
                     mSuggestionSearch.requestSuggestion((new SuggestionSearchOption())
                             .keyword(query)
@@ -457,7 +550,7 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
                 //搜索历史置为不可见
                 mHistoryLayout.setVisibility(View.INVISIBLE);
 
-                if (newText != null && !newText.isEmpty()) {
+                if (newText != null && !newText.isEmpty() && !TextUtils.isEmpty(mCurrentCity)) {
                     try {
                         mSuggestionSearch.requestSuggestion((new SuggestionSearchOption())
                                 .keyword(newText)
@@ -488,10 +581,6 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
 
     @Override
     public boolean onOptionsItemSelected(@NonNull MenuItem item) {
-        if (item.getItemId() == R.id.action_route) {
-            mRouteEditor.toggle();
-            return true;
-        }
         return super.onOptionsItemSelected(item);
     }
 
@@ -525,23 +614,15 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
             int id = item.getItemId();
 
             if (id == R.id.nav_history) {
-                Intent intent = new Intent(MainActivity.this, HistoryActivity.class);
-
-                startActivity(intent);
+                mNavigation.navigate(R.id.history_destination);
             } else if (id == R.id.nav_settings) {
-                Intent intent = new Intent(MainActivity.this, SettingsActivity.class);
-                startActivity(intent);
+                mNavigation.navigate(R.id.settings_destination);
+            } else if (id == R.id.nav_ui_settings) {
+                mNavigation.navigate(R.id.ui_settings_destination);
+            } else if (id == R.id.nav_map) {
+                mNavigation.navigate(R.id.map_destination);
             } else if (id == R.id.nav_dev) {
-                if (!GoUtils.isDeveloperOptionsEnabled(this)) {
-                    GoUtils.DisplayToast(this, getResources().getString(R.string.app_error_dev));
-                } else {
-                    try {
-                        Intent intent = new Intent(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS);
-                        startActivity(intent);
-                    } catch (Exception e) {
-                        GoUtils.DisplayToast(this, getResources().getString(R.string.app_error_dev));
-                    }
-                }
+                com.suku616miao.meow.miaowuwu.utils.SystemSettingsNavigator.openDeveloperOptions(this);
             } else if (id == R.id.nav_update) {
                 checkUpdateVersion(true);
             } else if (id == R.id.nav_feedback) {
@@ -554,7 +635,7 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
             }
 
             DrawerLayout drawer = findViewById(R.id.drawer_layout);
-            drawer.closeDrawer(GravityCompat.START);
+            mNavigation.closeDrawer();
 
             return true;
         });
@@ -573,6 +654,8 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
         mBaiduMap = mMapView.getMap();
         mBaiduMap.setMapType(BaiduMap.MAP_TYPE_NORMAL);
         mBaiduMap.setMyLocationEnabled(true);
+        mBaiduMap.setMapStatus(MapStatusUpdateFactory.newMapStatus(new MapStatus.Builder()
+                .target(DEFAULT_MAP_CENTER).zoom(16f).build()));
         mSelectedMarker = null;
         mBaiduMap.setOnMapStatusChangeListener(new BaiduMap.OnMapStatusChangeListener() {
             @Override public void onMapStatusChangeStart(MapStatus status) {
@@ -581,7 +664,9 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
             @Override public void onMapStatusChangeStart(MapStatus status, int reason) {
                 if (mRouteEditor != null) mRouteEditor.onMapMoveStarted();
             }
-            @Override public void onMapStatusChange(MapStatus status) { }
+            @Override public void onMapStatusChange(MapStatus status) {
+                if (mRouteEditor != null) mRouteEditor.onMapMoving(status);
+            }
             @Override public void onMapStatusChangeFinish(MapStatus status) {
                 if (mRouteEditor != null) mRouteEditor.onMapMoveFinished(status);
             }
@@ -699,104 +784,62 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
         }
     }
 
-    //开启地图的定位图层
     private void initMapLocation() {
-        try {
-            // 定位初始化
-            mLocClient = new LocationClient(this);
-            mLocClient.registerLocationListener(new BDAbstractLocationListener() {
-                @Override
-                public void onReceiveLocation(BDLocation bdLocation) {
-                    if (bdLocation == null || mMapView == null) {// mapview 销毁后不在处理新接收的位置
-                        return;
-                    }
+        mBaiduMap.setMyLocationConfiguration(new MyLocationConfiguration(
+                MyLocationConfiguration.LocationMode.NORMAL, true, null));
+        mRealLocationSource = new SystemLocationSource(getApplicationContext(), this::onRealLocation);
+        // Separate geocoders keep city lookup from opening or overwriting the selected POI bubble.
+        mLocationGeoCoder = GeoCoder.newInstance();
+        mLocationGeoCoder.setOnGetGeoCodeResultListener(new OnGetGeoCoderResultListener() {
+            @Override public void onGetGeoCodeResult(GeoCodeResult result) { }
 
-                    mCurrentCity = bdLocation.getCity();
-                    mCurrentLat = bdLocation.getLatitude();
-                    mCurrentLon = bdLocation.getLongitude();
-                    MyLocationData locData = new MyLocationData.Builder()
-                            .accuracy(bdLocation.getRadius())
-                            .direction(mCurrentDirection)// 此处设置开发者获取到的方向信息，顺时针0-360
-                            .latitude(bdLocation.getLatitude())
-                            .longitude(bdLocation.getLongitude()).build();
-                    mBaiduMap.setMyLocationData(locData);
-                    MyLocationConfiguration configuration = new MyLocationConfiguration(MyLocationConfiguration.LocationMode.NORMAL, true, null);
-                    mBaiduMap.setMyLocationConfiguration(configuration);
-
-                    /* 如果出现错误，则需要重新请求位置 */
-                    int err = bdLocation.getLocType();
-                    if (err == BDLocation.TypeCriteriaException || err == BDLocation.TypeNetWorkException) {
-                        mLocClient.requestLocation();   /* 请求位置 */
-                    } else {
-                        if (isFirstLoc) {
-                            isFirstLoc = false;
-                            // 这里记录百度地图返回的位置
-                            mMarkLatLngMap = new LatLng(bdLocation.getLatitude(), bdLocation.getLongitude());
-                            MapStatus.Builder builder = new MapStatus.Builder();
-                            builder.target(mMarkLatLngMap).zoom(18.0f);
-                            mBaiduMap.animateMapStatus(MapStatusUpdateFactory.newMapStatus(builder.build()));
-
-                            XLog.i("First Baidu LatLng: " + mMarkLatLngMap);
-                        }
-                    }
+            @Override public void onGetReverseGeoCodeResult(ReverseGeoCodeResult result) {
+                mCityLookupPending = false;
+                if (result == null || result.error != SearchResult.ERRORNO.NO_ERROR || result.getAddressDetail() == null) {
+                    mCityLookupFailed = true;
+                    XLog.i("Current city lookup unavailable: " + (result == null ? "empty result" : result.error));
+                    return;
                 }
-                /**
-                 * 错误的状态码
-                 * <a><a href="http://lbsyun.baidu.com/index.php?title=android-locsdk/guide/addition-func/error-code">...</a></a>
-                 * <p>
-                 * 回调定位诊断信息，开发者可以根据相关信息解决定位遇到的一些问题
-                 *
-                 * @param locType      当前定位类型
-                 * @param diagnosticType  诊断类型（1~9）
-                 * @param diagnosticMessage 具体的诊断信息释义
-                 */
-                @Override
-                public void onLocDiagnosticMessage(int locType, int diagnosticType, String diagnosticMessage) {
-                    XLog.i("Baidu ERROR: " + locType + "-" + diagnosticType + "-" + diagnosticMessage);
+                mCurrentCity = result.getAddressDetail().city;
+                mCityLookupFailed = false;
+                XLog.i("Current city lookup completed");
+                if (searchView != null && !TextUtils.isEmpty(searchView.getQuery()) && !TextUtils.isEmpty(mCurrentCity)) {
+                    mSuggestionSearch.requestSuggestion(new SuggestionSearchOption()
+                            .keyword(searchView.getQuery().toString()).city(mCurrentCity));
                 }
-            });
-            LocationClientOption locationOption = getLocationClientOption();
-            //需将配置好的LocationClientOption对象，通过setLocOption方法传递给LocationClient对象使用
-            mLocClient.setLocOption(locationOption);
-            //开始定位
-            mLocClient.start();
-        } catch (Exception e) {
-            XLog.e("ERROR: initMapLocation");
+            }
+        });
+    }
+
+    private void onRealLocation(Location location) {
+        mLastRealLocation = new Location(location);
+        double[] bd09 = MapUtils.wgs2bd09(location.getLongitude(), location.getLatitude());
+        mCurrentLon = bd09[0];
+        mCurrentLat = bd09[1];
+        mHasLocation = true;
+        mBaiduMap.setMyLocationData(new MyLocationData.Builder()
+                .accuracy(location.getAccuracy()).direction(mCurrentDirection)
+                .latitude(mCurrentLat).longitude(mCurrentLon).build());
+        XLog.i("Real position applied to map: provider=" + location.getProvider() + ", accuracy=" + location.getAccuracy());
+        if (isFirstLoc) {
+            isFirstLoc = false;
+            mBaiduMap.animateMapStatus(MapStatusUpdateFactory.newMapStatus(new MapStatus.Builder()
+                    .target(new LatLng(mCurrentLat, mCurrentLon)).zoom(18f).build()));
+        }
+        // City names do not need a network request on every one-second position update.
+        if (!mCityLookupPending && (mLastCityLookupAttempt == null
+                || location.distanceTo(mLastCityLookupAttempt) >= CITY_REFRESH_DISTANCE_METERS)) {
+            requestCurrentCity();
         }
     }
 
-    @NonNull
-    private static LocationClientOption getLocationClientOption() {
-        LocationClientOption locationOption = new LocationClientOption();
-        //可选，默认高精度，设置定位模式，高精度，低功耗，仅设备
-        locationOption.setLocationMode(LocationClientOption.LocationMode.Hight_Accuracy);
-        //可选，默认gcj02，设置返回的定位结果坐标系，如果配合百度地图使用，建议设置为bd09ll;
-        locationOption.setCoorType("bd09ll");
-        //可选，默认0，即仅定位一次，设置发起连续定位请求的间隔需要大于等于1000ms才是有效的
-        locationOption.setScanSpan(1000);
-        //可选，设置是否需要地址信息，默认不需要
-        locationOption.setIsNeedAddress(true);
-        //可选，设置是否需要设备方向结果
-        locationOption.setNeedDeviceDirect(false);
-        //可选，默认false，设置是否当gps有效时按照1S1次频率输出GPS结果
-        locationOption.setLocationNotify(true);
-        //可选，默认true，定位SDK内部是一个SERVICE，并放到了独立进程，设置是否在stop的时候杀死这个进程，默认不杀死
-        locationOption.setIgnoreKillProcess(true);
-        //可选，默认false，设置是否需要位置语义化结果，可以在BDLocation.getLocationDescribe里得到，结果类似于“在北京天安门附近”
-        locationOption.setIsNeedLocationDescribe(false);
-        //可选，默认false，设置是否需要POI结果，可以在BDLocation.getPoiList里得到
-        locationOption.setIsNeedLocationPoiList(false);
-        //可选，默认false，设置是否收集CRASH信息，默认收集
-        locationOption.SetIgnoreCacheException(true);
-        //可选，默认false，设置是否开启Gps定位
-        //locationOption.setOpenGps(true);
-        locationOption.setOpenGnss(true);
-        //可选，默认false，设置定位时是否需要海拔信息，默认不需要，除基础定位版本都可用
-        locationOption.setIsNeedAltitude(false);
-        return locationOption;
+    private void requestCurrentCity() {
+        if (!mHasLocation || mCityLookupPending) return;
+        mLastCityLookupAttempt = new Location(mLastRealLocation);
+        mCityLookupPending = mLocationGeoCoder.reverseGeoCode(new ReverseGeoCodeOption()
+                .location(new LatLng(mCurrentLat, mCurrentLon)));
     }
 
-    //地图上各按键的监听
     private void initMapButton() {
         RadioGroup mGroupMapType = this.findViewById(R.id.RadioGroupMapType);
         mGroupMapType.setOnCheckedChangeListener((group, checkedId) -> {
@@ -821,7 +864,7 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
         ImageButton inputPosBtn = this.findViewById(R.id.input_pos);
         inputPosBtn.setOnClickListener(v -> {
             AlertDialog dialog;
-            AlertDialog.Builder builder = new AlertDialog.Builder(MainActivity.this);
+            AlertDialog.Builder builder = new MaterialAlertDialogBuilder(MainActivity.this, R.style.ThemeOverlay_App_RoundedInputDialog);
             builder.setTitle("请输入经度和纬度");
             View view = LayoutInflater.from(MainActivity.this).inflate(R.layout.location_input, null);
             builder.setView(view);
@@ -875,6 +918,7 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
     //标定选择的位置
     private void markMap() {
         if (mMarkLatLngMap == null) return;
+        isFirstLoc = false;
         if (mRouteEditor.isOpen()) {
             mRouteEditor.selectCandidate(mMarkLatLngMap);
             return;
@@ -884,7 +928,7 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
         }
     }
 
-    private static void updateSelectedMarker() {
+    private void updateSelectedMarker() {
         if (mSelectedMarker == null) {
             mSelectedMarker = (Marker) mBaiduMap.addOverlay(
                     new MarkerOptions().position(mMarkLatLngMap).icon(mMapIndicator));
@@ -893,7 +937,7 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
         }
     }
 
-    private static void clearSelectedMarker() {
+    private void clearSelectedMarker() {
         if (mSelectedMarker != null) {
             mSelectedMarker.remove();
             mSelectedMarker = null;
@@ -902,6 +946,10 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
     }
 
     private void resetMap() {
+        if (!mHasLocation) {
+            GoUtils.DisplayToast(this, getString(R.string.map_location_unavailable));
+            return;
+        }
         clearSelectedMarker();
         mMarkLatLngMap = null;
 
@@ -918,11 +966,12 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
     }
 
     // 在地图上显示位置
-    public static boolean showLocation(String name, String bd09Longitude, String bd09Latitude) {
+    private boolean showLocation(String name, String bd09Longitude, String bd09Latitude) {
         boolean ret = true;
 
         try {
             if (!bd09Longitude.isEmpty() && !bd09Latitude.isEmpty()) {
+                isFirstLoc = false;
                 mMarkName = name;
                 mMarkLatLngMap = new LatLng(Double.parseDouble(bd09Latitude), Double.parseDouble(bd09Longitude));
                 updateSelectedMarker();
@@ -944,17 +993,16 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
 
     private void initRouteEditor() {
         mRouteEditor = new RouteEditor(this, mBaiduMap, findViewById(R.id.route_panel),
-                findViewById(R.id.route_crosshair), new RouteEditor.Listener() {
+                findViewById(R.id.route_crosshair), mMapIndicator, new RouteEditor.Listener() {
             @Override public void onEditorVisibilityChanged(boolean visible) {
-                mButtonStart.setVisibility(visible ? View.GONE : View.VISIBLE);
+                if (mNavigation != null) mNavigation.animateRouteButtons(visible);
                 if (visible) {
                     // Location fixes must not move the camera while the user chooses a route vertex.
                     isFirstLoc = false;
                     clearSelectedMarker();
-                    mMarkLatLngMap = null;
                 }
             }
-            @Override public boolean onStartRoute(List<RoutePoint> points, double speed) {
+            @Override public boolean onStartRoute(List<RoutePoint> points, double speed, boolean repeat) {
                 if (!GoUtils.isGpsOpened(MainActivity.this)) {
                     GoUtils.showEnableGpsDialog(MainActivity.this);
                     return false;
@@ -967,16 +1015,20 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
                     GoUtils.showEnableMockLocationDialog(MainActivity.this);
                     return false;
                 }
+                // Route playback has its own position; the normal position button stops it.
+                mMarkLatLngMap = null;
                 if (isMockServStart) {
                     if (mServiceBinder == null) {
                         mPendingRoute = new ArrayList<>(points);
                         mPendingRouteSpeed = speed;
+                        mPendingRouteRepeat = repeat;
                     } else {
-                        mServiceBinder.startRoute(points, speed, getConfiguredAltitude());
+                        mServiceBinder.startRoute(points, speed, getConfiguredAltitude(), repeat);
                     }
                 } else {
                     mPendingRoute = new ArrayList<>(points);
                     mPendingRouteSpeed = speed;
+                    mPendingRouteRepeat = repeat;
                     RoutePoint first = points.get(0);
                     if (!startMockService(first.getLongitude(), first.getLatitude(), getConfiguredAltitude())) {
                         mPendingRoute = null;
@@ -991,6 +1043,9 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
                 mPendingRoute = null;
                 stopGoLocation();
                 mRouteEditor.setPlaybackState(ServiceGo.ROUTE_NONE);
+            }
+            @Override public void onReplaceRoute() {
+                if (isMockServStart) stopGoLocation();
             }
         });
     }
@@ -1025,8 +1080,10 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
 
     private void stopGoLocation() {
         mRouteUiHandler.removeCallbacks(mRouteStatusPoll);
+        mPendingRoute = null;
+        mPendingPosition = null;
+        mRouteEditor.setPlaybackState(ServiceGo.ROUTE_NONE);
         mServiceBinder = null;
-        mLastRouteState = ServiceGo.ROUTE_NONE;
         if (mIsServiceBound) {
             unbindService(mConnection);
             mIsServiceBound = false;
@@ -1039,7 +1096,13 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
 
     private void doGoLocation(View v) {
         if (mRouteEditor.isOpen()) {
-            GoUtils.DisplayToast(this, getString(R.string.route_stop_before_edit));
+            mRouteEditor.toggle();
+            GoUtils.DisplayToast(this, getString(R.string.route_changes_may_not_be_saved));
+        }
+        // Stopping never requires network, location or overlay access to remain enabled.
+        if (isMockServStart && mMarkLatLngMap == null) {
+            stopGoLocation();
+            Snackbar.make(v, "模拟位置已终止", Snackbar.LENGTH_LONG).show();
             return;
         }
         if (!GoUtils.isNetworkAvailable(this)) {
@@ -1059,26 +1122,21 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
         }
 
         if (isMockServStart) {
-            if (mMarkLatLngMap == null) {
-                stopGoLocation();
-                Snackbar.make(v, "模拟位置已终止", Snackbar.LENGTH_LONG)
-                        .setAction("Action", null).show();
-                mButtonStart.setImageResource(R.drawable.ic_position);
+            double[] latLng = MapUtils.bd2wgs(mMarkLatLngMap.longitude, mMarkLatLngMap.latitude);
+            recordCurrentLocation(mMarkLatLngMap.longitude, mMarkLatLngMap.latitude);
+            // BindService accepts a binding before the Binder arrives; queue the requested action.
+            mPendingRoute = null;
+            mPendingPosition = new double[] {latLng[0], latLng[1], getConfiguredAltitude()};
+            clearSelectedMarker();
+            mMarkLatLngMap = null;
+            if (mServiceBinder == null) {
+                Snackbar.make(v, getString(R.string.position_waiting_for_service), Snackbar.LENGTH_LONG).show();
             } else {
-                double[] latLng = MapUtils.bd2wgs(mMarkLatLngMap.longitude, mMarkLatLngMap.latitude);
-                double alt = Double.parseDouble(sharedPreferences.getString("setting_altitude", "55.0"));
-                mServiceBinder.setPosition(latLng[0], latLng[1], alt);
-                Snackbar.make(v, "已传送到新位置", Snackbar.LENGTH_LONG)
-                        .setAction("Action", null).show();
+                applyPendingPosition();
+            }
 
-                recordCurrentLocation(mMarkLatLngMap.longitude, mMarkLatLngMap.latitude);
-
-                clearSelectedMarker();
-                mMarkLatLngMap = null;
-
-                if (GoUtils.isWifiEnabled(MainActivity.this)) {
-                    GoUtils.showDisableWifiDialog(MainActivity.this);
-                }
+            if (GoUtils.isWifiEnabled(MainActivity.this)) {
+                GoUtils.showDisableWifiDialog(MainActivity.this);
             }
         } else {
             if (!GoUtils.isAllowMockLocation(this)) {
@@ -1104,6 +1162,23 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
                 }
             }
         }
+    }
+
+    private void applyPendingPosition() {
+        if (handleSimulationFailure()) return;
+        double[] position = mPendingPosition;
+        mPendingPosition = null;
+        mServiceBinder.setPosition(position[0], position[1], position[2]);
+        mRouteEditor.setPlaybackState(ServiceGo.ROUTE_NONE);
+        Snackbar.make(mButtonStart, "已传送到新位置", Snackbar.LENGTH_LONG).show();
+    }
+
+    private boolean handleSimulationFailure() {
+        if (mServiceBinder.getRouteState() != ServiceGo.ROUTE_FAILED) return false;
+        String reason = mServiceBinder.getFailureReason();
+        stopGoLocation();
+        GoUtils.DisplayToast(this, reason);
+        return true;
     }
 
     /*============================== 历史记录 相关 ==============================*/
@@ -1302,7 +1377,7 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
             }
         });
         mSearchHistoryList.setOnItemLongClickListener((parent, view, position, id) -> {
-            new AlertDialog.Builder(MainActivity.this)
+            new MaterialAlertDialogBuilder(MainActivity.this)
                     .setTitle("警告")//这里是表头的内容
                     .setMessage("确定要删除该项搜索记录吗?")//这里是中间显示的具体信息
                     .setPositiveButton("确定",(dialog, which) -> {
@@ -1424,13 +1499,10 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
                     String resp = responseBody.string();
                     // 注意，该请求在子线程，不能直接操作界面
                     runOnUiThread(() -> {
+                        if (isDestroyed()) return;
                         try {
                             JSONObject getRetJson = new JSONObject(resp);
-                            String curVersion = GoUtils.getVersionName(MainActivity.this);
-
-                            if (curVersion != null
-                                    && (!getRetJson.getString("name").contains(curVersion)
-                                    || !getRetJson.getString("tag_name").contains(curVersion))) {
+                            if (ReleaseVersion.isNewer(getRetJson.getString("tag_name"), BuildConfig.VERSION_NAME)) {
                                 JSONArray jsonArray = getRetJson.getJSONArray("assets");
                                 JSONObject jsonObject = findApkAsset(jsonArray, "browser_download_url");
                                 if (jsonObject == null) {
@@ -1456,6 +1528,9 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
                             }
                         } catch (JSONException e) {
                             XLog.e("ERROR: resolve json");
+                            checkUpdateVersionGitLab(result);
+                        } catch (IllegalArgumentException e) {
+                            XLog.e("GitHub 发布标签不是有效的稳定版本，尝试 GitLab");
                             checkUpdateVersionGitLab(result);
                         }
                     });
@@ -1498,6 +1573,7 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
                     }
                     String resp = responseBody.string();
                     runOnUiThread(() -> {
+                        if (isDestroyed()) return;
                         try {
                             JSONArray array = new JSONArray(resp);
                             if (array.length() == 0) {
@@ -1507,13 +1583,10 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
                                 return;
                             }
                             JSONObject getRetJson = array.getJSONObject(0);
-                            String curVersion = GoUtils.getVersionName(MainActivity.this);
                             String releaseName = getRetJson.optString("name");
                             String tagName = getRetJson.optString("tag_name");
 
-                            if (curVersion != null
-                                    && (!releaseName.contains(curVersion)
-                                    || !tagName.contains(curVersion))) {
+                            if (ReleaseVersion.isNewer(tagName, BuildConfig.VERSION_NAME)) {
                                 JSONObject assets = getRetJson.optJSONObject("assets");
                                 JSONArray links = assets != null ? assets.optJSONArray("links") : null;
                                 JSONObject targetLink = findApkAsset(links, "url");
@@ -1548,6 +1621,9 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
                             if (result) {
                                 GoUtils.DisplayToast(MainActivity.this, "更新检测失败");
                             }
+                        } catch (IllegalArgumentException e) {
+                            XLog.e("GitLab 发布标签不是有效的稳定版本");
+                            if (result) GoUtils.DisplayToast(MainActivity.this, "更新检测失败：版本标签无效");
                         }
                     });
                 }

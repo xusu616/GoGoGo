@@ -7,15 +7,28 @@ import androidx.preference.EditTextPreference;
 import androidx.preference.ListPreference;
 import androidx.preference.Preference;
 import androidx.preference.PreferenceFragmentCompat;
-import androidx.preference.SwitchPreferenceCompat;
-
-import com.baidu.mapapi.SDKInitializer;
-import com.elvishew.xlog.XLog;
+import com.suku616miao.meow.miaowuwu.ui.MaterialEditTextPreferenceDialogFragment;
+import com.suku616miao.meow.miaowuwu.ui.MaterialListPreferenceDialogFragment;
 import com.suku616miao.meow.miaowuwu.utils.GoUtils;
 
 import java.util.Objects;
 
 public class FragmentSettings extends PreferenceFragmentCompat {
+    @Override
+    @SuppressWarnings("deprecation") // AndroidX preference dialogs still locate their owner by target Fragment.
+    public void onDisplayPreferenceDialog(Preference preference) {
+        if (!(preference instanceof EditTextPreference) && !(preference instanceof ListPreference)) {
+            super.onDisplayPreferenceDialog(preference);
+            return;
+        }
+        String tag = "androidx.preference.PreferenceFragment.DIALOG";
+        if (getParentFragmentManager().findFragmentByTag(tag) != null) return;
+        androidx.fragment.app.DialogFragment dialog = preference instanceof EditTextPreference
+                ? MaterialEditTextPreferenceDialogFragment.newInstance(preference.getKey())
+                : MaterialListPreferenceDialogFragment.newInstance(preference.getKey());
+        dialog.setTargetFragment(this, 0);
+        dialog.show(getParentFragmentManager(), tag);
+    }
 
     // Set a non-empty decimal EditTextPreference
     private void setupDecimalEditTextPreference(EditTextPreference preference) {
@@ -64,24 +77,6 @@ public class FragmentSettings extends PreferenceFragmentCompat {
 
         EditTextPreference pfLonOffset = findPreference("setting_lon_max_offset");
         setupDecimalEditTextPreference(pfLonOffset);
-
-        SwitchPreferenceCompat pLog = findPreference("setting_log_off");
-        if (pLog != null) {
-            pLog.setOnPreferenceChangeListener((preference, newValue) -> {
-                if(((SwitchPreferenceCompat) preference).isChecked() != (Boolean) newValue) {
-                    XLog.d(preference.getKey() + newValue);
-
-                    if (Boolean.parseBoolean(newValue.toString())) {
-                        XLog.d("on");
-                    } else {
-                        XLog.d("off");
-                    }
-                    return true;
-                } else {
-                    return false;
-                }
-            });
-        }
 
         EditTextPreference pfPosHisValid = findPreference("setting_history_expiration");
         setupDecimalEditTextPreference(pfPosHisValid);

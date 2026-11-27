@@ -1,0 +1,11 @@
+<resources>
+    <style name="ShapeAppearance.App.InputBox" parent="ShapeAppearance.Material3.Corner.Medium">
+        <item name="cornerSize">12dp</item>
+    </style>
+    <style name="Widget.App.RoundedTextInput" parent="Widget.Material3.TextInputLayout.OutlinedBox">
+        <item name="shapeAppearance">@style/ShapeAppearance.App.InputBox</item>
+    </style>
+    <style name="ThemeOverlay.App.RoundedInputDialog" parent="ThemeOverlay.Material3.MaterialAlertDialog">
+        <item name="shapeAppearanceOverlay">@style/ShapeAppearance.App.RoundedPanel</item>
+    </style>
+</resources>

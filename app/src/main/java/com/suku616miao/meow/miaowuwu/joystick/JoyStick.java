@@ -8,7 +8,7 @@ import android.database.sqlite.SQLiteDatabase;
 import android.graphics.PixelFormat;
 import android.text.TextUtils;
 import android.util.AttributeSet;
-import android.util.Log;
+import com.suku616miao.meow.miaowuwu.logging.AppLogger;
 import android.view.Gravity;
 import android.view.LayoutInflater;
 import android.view.MotionEvent;
@@ -30,12 +30,14 @@ import com.baidu.mapapi.map.MapStatus;
 import com.baidu.mapapi.map.MapStatusUpdateFactory;
 import com.baidu.mapapi.map.MapView;
 import com.baidu.mapapi.map.MarkerOptions;
+import com.baidu.mapapi.map.BitmapDescriptor;
+import com.baidu.mapapi.map.BitmapDescriptorFactory;
 import com.baidu.mapapi.map.MyLocationData;
 import com.baidu.mapapi.model.LatLng;
 import com.baidu.mapapi.search.sug.SuggestionSearch;
 import com.baidu.mapapi.search.sug.SuggestionSearchOption;
 import com.suku616miao.meow.miaowuwu.database.DataBaseHistoryLocation;
-import com.suku616miao.meow.miaowuwu.HistoryActivity;
+import com.suku616miao.meow.miaowuwu.ui.HistoryColumns;
 import com.suku616miao.meow.miaowuwu.MainActivity;
 import com.suku616miao.meow.miaowuwu.R;
 import com.suku616miao.meow.miaowuwu.utils.GoUtils;
@@ -88,6 +90,7 @@ public class JoyStick extends View {
     private FrameLayout mMapLayout;
     private MapView mMapView;
     private BaiduMap mBaiduMap;
+    private BitmapDescriptor mMapIndicator;
     private LatLng mCurMapLngLat;
     private LatLng mMarkMapLngLat;
     private SuggestionSearch mSuggestionSearch;
@@ -257,6 +260,7 @@ public class JoyStick extends View {
 
         mBaiduMap.setMyLocationEnabled(false);
         mMapView.onDestroy();
+        mMapIndicator.recycle();
     }
 
     public void setListener(JoyStickClickListener mListener) {
@@ -615,6 +619,7 @@ public class JoyStick extends View {
         mMapView = mMapLayout.findViewById(R.id.map_joystick);
         mMapView.showZoomControls(false);
         mBaiduMap = mMapView.getMap();
+        mMapIndicator = BitmapDescriptorFactory.fromResource(R.drawable.icon_gcoding);
         mBaiduMap.setMapType(BaiduMap.MAP_TYPE_NORMAL);
         mBaiduMap.setMyLocationEnabled(true);
 
@@ -678,7 +683,7 @@ public class JoyStick extends View {
     private void markBaiduMap(LatLng latLng) {
         mMarkMapLngLat = latLng;
 
-        MarkerOptions ooA = new MarkerOptions().position(latLng).icon(MainActivity.mMapIndicator);
+        MarkerOptions ooA = new MarkerOptions().position(latLng).icon(mMapIndicator);
         mBaiduMap.clear();
         mBaiduMap.addOverlay(ooA);
 
@@ -816,7 +821,7 @@ public class JoyStick extends View {
                 long TimeStamp = cursor.getInt(4);
                 String BD09Longitude = cursor.getString(5);
                 String BD09Latitude = cursor.getString(6);
-                Log.d("TB", ID + "\t" + Location + "\t" + Longitude + "\t" + Latitude + "\t" + TimeStamp + "\t" + BD09Longitude + "\t" + BD09Latitude);
+                AppLogger.d("TB", ID + "\t" + Location + "\t" + Longitude + "\t" + Latitude + "\t" + TimeStamp + "\t" + BD09Longitude + "\t" + BD09Latitude);
                 BigDecimal bigDecimalLongitude = BigDecimal.valueOf(Double.parseDouble(Longitude));
                 BigDecimal bigDecimalLatitude = BigDecimal.valueOf(Double.parseDouble(Latitude));
                 BigDecimal bigDecimalBDLongitude = BigDecimal.valueOf(Double.parseDouble(BD09Longitude));
@@ -825,17 +830,17 @@ public class JoyStick extends View {
                 double doubleLatitude = bigDecimalLatitude.setScale(11, RoundingMode.HALF_UP).doubleValue();
                 double doubleBDLongitude = bigDecimalBDLongitude.setScale(11, RoundingMode.HALF_UP).doubleValue();
                 double doubleBDLatitude = bigDecimalBDLatitude.setScale(11, RoundingMode.HALF_UP).doubleValue();
-                item.put(HistoryActivity.KEY_ID, Integer.toString(ID));
-                item.put(HistoryActivity.KEY_LOCATION, Location);
-                item.put(HistoryActivity.KEY_TIME, GoUtils.timeStamp2Date(Long.toString(TimeStamp)));
-                item.put(HistoryActivity.KEY_LNG_LAT_WGS, "[经度:" + doubleLongitude + " 纬度:" + doubleLatitude + "]");
-                item.put(HistoryActivity.KEY_LNG_LAT_CUSTOM, "[经度:" + doubleBDLongitude + " 纬度:" + doubleBDLatitude + "]");
+                item.put(HistoryColumns.KEY_ID, Integer.toString(ID));
+                item.put(HistoryColumns.KEY_LOCATION, Location);
+                item.put(HistoryColumns.KEY_TIME, GoUtils.timeStamp2Date(Long.toString(TimeStamp)));
+                item.put(HistoryColumns.KEY_LNG_LAT_WGS, "[经度:" + doubleLongitude + " 纬度:" + doubleLatitude + "]");
+                item.put(HistoryColumns.KEY_LNG_LAT_CUSTOM, "[经度:" + doubleBDLongitude + " 纬度:" + doubleBDLatitude + "]");
                 mAllRecord.add(item);
             }
             cursor.close();
             mHistoryLocationDB.close();
         } catch (Exception e) {
-            Log.e("JOYSTICK", "ERROR - fetchAllRecord");
+            AppLogger.e("JOYSTICK", "ERROR - fetchAllRecord");
         }
     }
 
@@ -852,11 +857,11 @@ public class JoyStick extends View {
                         mContext,
                         list,
                         R.layout.history_item,
-                        new String[]{HistoryActivity.KEY_ID, HistoryActivity.KEY_LOCATION, HistoryActivity.KEY_TIME, HistoryActivity.KEY_LNG_LAT_WGS, HistoryActivity.KEY_LNG_LAT_CUSTOM}, // 与下面数组元素要一一对应
+                        new String[]{HistoryColumns.KEY_ID, HistoryColumns.KEY_LOCATION, HistoryColumns.KEY_TIME, HistoryColumns.KEY_LNG_LAT_WGS, HistoryColumns.KEY_LNG_LAT_CUSTOM}, // 与下面数组元素要一一对应
                         new int[]{R.id.LocationID, R.id.LocationText, R.id.TimeText, R.id.WGSLatLngText, R.id.BDLatLngText});
                 mRecordListView.setAdapter(simAdapt);
             } catch (Exception e) {
-                Log.e("JOYSTICK", "ERROR - showHistory");
+                AppLogger.e("JOYSTICK", "ERROR - showHistory");
             }
         }
     }

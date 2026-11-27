@@ -1,0 +1,11 @@
+<resources>
+    <string name="ui_theme_blue">蓝色</string>
+    <string name="ui_theme_purple">紫色</string>
+    <string name="ui_theme_rose">玫瑰</string>
+    <string name="ui_theme_amber">琥珀</string>
+    <string name="ui_theme_hue_label">色相</string>
+    <string name="ui_theme_whiteness_label">白色混合</string>
+    <string name="ui_theme_ring_hint">沿色环滑动预览，点击应用颜色</string>
+    <item name="ui_theme_hue" type="id" />
+    <item name="ui_theme_whiteness" type="id" />
+</resources>

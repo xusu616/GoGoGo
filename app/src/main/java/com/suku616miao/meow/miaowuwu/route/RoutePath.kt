@@ -12,6 +12,8 @@ class RoutePath(points: List<RoutePoint>) {
     val totalDistanceMeters: Double
     internal val segments: List<RouteSegment>
 
+    fun closed(): RoutePath = if (points.first().isSamePosition(points.last())) this else RoutePath(points + points.first())
+
     init {
         require(this.points.size >= 2) { "A route needs at least two points" }
         val routeSegments = ArrayList<RouteSegment>(this.points.size - 1)
@@ -19,10 +21,7 @@ class RoutePath(points: List<RoutePoint>) {
         for (index in 0 until this.points.lastIndex) {
             val start = this.points[index]
             val end = this.points[index + 1]
-            val samePosition = start.latitude == end.latitude &&
-                (start.longitude == end.longitude ||
-                    abs(start.longitude - end.longitude) == 360.0 ||
-                    abs(start.latitude) == 90.0)
+            val samePosition = start.isSamePosition(end)
             require(!samePosition) { "Adjacent route points must be different positions" }
 
             val segment = RouteSegment(start, end, distanceMeters)

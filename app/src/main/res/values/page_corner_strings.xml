@@ -1,0 +1,4 @@
+<resources>
+    <string name="ui_permanent_corners">启用永久性圆角</string>
+    <string name="ui_permanent_corners_summary">保留页面左上和右上圆角，半径由 Android 系统读取<strike>…我在十天前还不知道这个词的网络含义</strike>…</string>
+</resources>

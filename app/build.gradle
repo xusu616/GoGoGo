@@ -7,7 +7,7 @@ plugins {
 
 android {
     ndkVersion = '26.2.11394342'
-    compileSdk = 32
+    compileSdk = 36
     buildToolsVersion = '36.0.0'
     namespace = 'com.suku616miao.meow.miaowuwu'
 
@@ -31,8 +31,8 @@ android {
         minSdkVersion 27
         //noinspection ExpiredTargetSdkVersion
         targetSdkVersion 32
-        versionCode 1131
-        versionName '1.13.1' // https://semver.org/lang/zh-CN/
+        versionCode 1140
+        versionName '1.14.0' // https://semver.org/lang/zh-CN/
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         resourceConfigurations += ['zh', 'zh-rCN', 'en', 'en-rUS']
         ndk {
@@ -121,11 +121,14 @@ kotlin {
 dependencies {
     implementation fileTree(include: ['*.jar'], dir: 'libs')
     // AppCompat 1.5.1 开始显式依赖于 Lifecycle 2.5.1 和 SavedState 1.2.0
-    implementation 'androidx.lifecycle:lifecycle-viewmodel-ktx:2.5.1'
-    implementation 'androidx.appcompat:appcompat:1.5.1'
+    implementation 'androidx.appcompat:appcompat:1.7.1'
+    implementation 'androidx.activity:activity-ktx:1.11.0'
+    implementation 'androidx.navigation:navigation-fragment-ktx:2.9.5'
+    implementation 'androidx.dynamicanimation:dynamicanimation:1.1.0'
     implementation 'androidx.constraintlayout:constraintlayout:2.1.4'
     implementation 'androidx.preference:preference:1.2.1'
-    implementation 'com.google.android.material:material:1.7.0'
+    implementation 'com.google.android.material:material:1.13.0'
+    implementation 'com.google.android.gms:play-services-location:21.3.0'
     implementation 'com.squareup.okhttp3:okhttp:4.12.0'
     implementation 'com.elvishew:xlog:1.11.1'
     implementation 'io.noties.markwon:core:4.6.2'

@@ -30,11 +30,14 @@ import androidx.core.app.NotificationCompat;
 
 import com.elvishew.xlog.XLog;
 import com.suku616miao.meow.miaowuwu.MainActivity;
+import com.suku616miao.meow.miaowuwu.MockProviderLifecycle;
 import com.suku616miao.meow.miaowuwu.R;
 import com.suku616miao.meow.miaowuwu.joystick.JoyStick;
 import com.suku616miao.meow.miaowuwu.route.RoutePath;
 import com.suku616miao.meow.miaowuwu.route.RoutePlayer;
 import com.suku616miao.meow.miaowuwu.route.RoutePoint;
+import com.suku616miao.meow.miaowuwu.route.RoutePlaybackSnapshot;
+import com.suku616miao.meow.miaowuwu.utils.GoUtils;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -60,7 +63,11 @@ public class ServiceGo extends Service {
     public static final int ROUTE_PLAYING = 1;
     public static final int ROUTE_PAUSED = 2;
     public static final int ROUTE_FINISHED = 3;
+    public static final int ROUTE_FAILED = 4;
     private volatile int mRouteState = ROUTE_NONE;
+    private volatile String mFailureReason;
+    private volatile RoutePlaybackSnapshot mRouteSnapshot =
+            new RoutePlaybackSnapshot(ROUTE_NONE, DEFAULT_LAT, DEFAULT_LNG);
     private RoutePlayer mRoutePlayer;
     private double mRouteSpeed;
     private long mLastRouteTick;
@@ -92,20 +99,24 @@ public class ServiceGo extends Service {
     @Override
     public void onCreate() {
         super.onCreate();
+        MockProviderLifecycle.markServiceRunning(true);
 
         mLocManager = (LocationManager) this.getSystemService(Context.LOCATION_SERVICE);
 
-        removeTestProviderNetwork();
-        addTestProviderNetwork();
-
-        removeTestProviderGPS();
-        addTestProviderGPS();
-
         initGoLocation();
-
         initNotification();
-
         initJoyStick();
+        // Lifecycle registration and removal both run on the main thread; registration cannot
+        // finish after onDestroy has already removed the test providers.
+        if (!GoUtils.isAllowMockLocation(this)) {
+            failSimulation("模拟位置权限已撤销，请重新选择影梭为模拟位置信息应用", null);
+            return;
+        }
+        removeTestProviderNetwork();
+        if (!addTestProviderNetwork()) return;
+        removeTestProviderGPS();
+        if (!addTestProviderGPS()) return;
+        mJoyStick.show();
     }
 
     @Override
@@ -114,6 +125,7 @@ public class ServiceGo extends Service {
         double latitude = intent.getDoubleExtra(MainActivity.LAT_MSG_ID, DEFAULT_LAT);
         double altitude = intent.getDoubleExtra(MainActivity.ALT_MSG_ID, DEFAULT_ALT);
         mLocHandler.post(() -> {
+            if (isStop) return;
             if (mRouteState == ROUTE_NONE) {
                 mCurLng = longitude;
                 mCurLat = latitude;
@@ -131,6 +143,7 @@ public class ServiceGo extends Service {
 
     @Override
     public void onDestroy() {
+        MockProviderLifecycle.markServiceRunning(false);
         isStop = true;
         mLocHandler.removeMessages(HANDLER_MSG_ID);
         mMainHandler.removeCallbacksAndMessages(null);
@@ -188,6 +201,7 @@ public class ServiceGo extends Service {
             @Override
             public void onMoveInfo(double speed, double disLng, double disLat, double angle) {
                 mLocHandler.post(() -> {
+                    if (isStop) return;
                     if (mRouteState == ROUTE_PLAYING || mRouteState == ROUTE_PAUSED) {
                         return;
                     }
@@ -204,6 +218,7 @@ public class ServiceGo extends Service {
             @Override
             public void onPositionInfo(double lng, double lat, double alt) {
                 mLocHandler.post(() -> {
+                    if (isStop) return;
                     if (mRouteState == ROUTE_PLAYING || mRouteState == ROUTE_PAUSED) {
                         return;
                     }
@@ -215,7 +230,6 @@ public class ServiceGo extends Service {
                 });
             }
         });
-        mJoyStick.show();
     }
 
     private void initGoLocation() {
@@ -231,9 +245,13 @@ public class ServiceGo extends Service {
                 if (isStop) {
                     return;
                 }
+                // Some ROMs ignore injection after AppOps revocation instead of throwing.
+                if (!GoUtils.isAllowMockLocation(ServiceGo.this)) {
+                    failSimulation("模拟位置权限已撤销，请重新选择影梭为模拟位置信息应用", null);
+                    return;
+                }
                 updateRoutePosition();
-                setLocationNetwork();
-                setLocationGPS();
+                if (!setLocationNetwork() || !setLocationGPS()) return;
                 publishJoyStickPosition();
                 sendEmptyMessageDelayed(HANDLER_MSG_ID, 100);
             }
@@ -259,9 +277,33 @@ public class ServiceGo extends Service {
     }
 
     private void publishJoyStickPosition() {
+        mRouteSnapshot = new RoutePlaybackSnapshot(mRouteState, mCurLat, mCurLng);
         mJoyStickPosition = new PositionSnapshot(mCurLng, mCurLat, mCurAlt);
         mMainHandler.removeCallbacks(mUpdateJoyStickPosition);
         mMainHandler.post(mUpdateJoyStickPosition);
+    }
+
+    /** Terminal failure is published before the main thread releases the foreground service. */
+    private void failSimulation(String reason, RuntimeException error) {
+        if (Looper.myLooper() != mLocHandler.getLooper()) {
+            // Initial registration fails on the lifecycle thread; route state belongs to the worker.
+            mLocHandler.post(() -> failSimulation(reason, error));
+            return;
+        }
+        if (isStop) return;
+        isStop = true;
+        mRoutePlayer = null;
+        mSpeed = 0.0;
+        mFailureReason = reason;
+        mRouteState = ROUTE_FAILED;
+        mLocHandler.removeMessages(HANDLER_MSG_ID);
+        mRouteSnapshot = new RoutePlaybackSnapshot(ROUTE_FAILED, mCurLat, mCurLng);
+        XLog.e(reason, error);
+        mMainHandler.removeCallbacks(mUpdateJoyStickPosition);
+        mMainHandler.post(() -> {
+            mJoyStick.hide();
+            stopSelf();
+        });
     }
 
     private void setJoyStickRoutePlaybackActive(boolean active) {
@@ -293,18 +335,20 @@ public class ServiceGo extends Service {
 
     private void removeTestProviderGPS() {
         try {
-            if (mLocManager.isProviderEnabled(LocationManager.GPS_PROVIDER)) {
-                mLocManager.setTestProviderEnabled(LocationManager.GPS_PROVIDER, false);
-                mLocManager.removeTestProvider(LocationManager.GPS_PROVIDER);
-            }
-        } catch (Exception e) {
-            XLog.e("SERVICEGO: ERROR - removeTestProviderGPS");
+            // A disabled test provider still shadows the real provider and must be removed.
+            mLocManager.removeTestProvider(LocationManager.GPS_PROVIDER);
+            XLog.i("Restored real GPS provider");
+        } catch (IllegalArgumentException e) {
+            // Before the first simulation there may be no test provider to remove.
+            XLog.d("No GPS test provider to remove");
+        } catch (SecurityException e) {
+            XLog.w("Mock-location permission was revoked; reselect this app to restore GPS on next start");
         }
     }
 
     // 注意下面临时添加 @SuppressLint("wrongconstant") 以处理 addTestProvider 参数值的 lint 错误
     @SuppressLint("wrongconstant")
-    private void addTestProviderGPS() {
+    private boolean addTestProviderGPS() {
         try {
             // 注意，由于 android api 问题，下面的参数会提示错误(以下参数是通过相关API获取的真实GPS参数，不是随便写的)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
@@ -317,12 +361,16 @@ public class ServiceGo extends Service {
             if (!mLocManager.isProviderEnabled(LocationManager.GPS_PROVIDER)) {
                 mLocManager.setTestProviderEnabled(LocationManager.GPS_PROVIDER, true);
             }
-        } catch (Exception e) {
-            XLog.e("SERVICEGO: ERROR - addTestProviderGPS");
+            return true;
+        } catch (SecurityException e) {
+            failSimulation("注册 GPS 模拟提供者时权限被撤销，请重新选择模拟位置信息应用", e);
+        } catch (IllegalArgumentException e) {
+            failSimulation("系统拒绝注册 GPS 模拟提供者，模拟已停止", e);
         }
+        return false;
     }
 
-    private void setLocationGPS() {
+    private boolean setLocationGPS() {
         try {
             // 尽可能模拟真实的 GPS 数据
             Location loc = new Location(LocationManager.GPS_PROVIDER);
@@ -339,25 +387,29 @@ public class ServiceGo extends Service {
             loc.setExtras(bundle);
 
             mLocManager.setTestProviderLocation(LocationManager.GPS_PROVIDER, loc);
-        } catch (Exception e) {
-            XLog.e("SERVICEGO: ERROR - setLocationGPS");
+            return true;
+        } catch (SecurityException e) {
+            failSimulation("GPS 模拟位置权限已撤销，模拟已停止", e);
+        } catch (IllegalArgumentException e) {
+            failSimulation("GPS 模拟提供者或位置数据已失效，模拟已停止", e);
         }
+        return false;
     }
 
     private void removeTestProviderNetwork() {
         try {
-            if (mLocManager.isProviderEnabled(LocationManager.NETWORK_PROVIDER)) {
-                mLocManager.setTestProviderEnabled(LocationManager.NETWORK_PROVIDER, false);
-                mLocManager.removeTestProvider(LocationManager.NETWORK_PROVIDER);
-            }
-        } catch (Exception e) {
-            XLog.e("SERVICEGO: ERROR - removeTestProviderNetwork");
+            mLocManager.removeTestProvider(LocationManager.NETWORK_PROVIDER);
+            XLog.i("Restored real network provider");
+        } catch (IllegalArgumentException e) {
+            XLog.d("No network test provider to remove");
+        } catch (SecurityException e) {
+            XLog.w("Mock-location permission was revoked; reselect this app to restore network on next start");
         }
     }
 
     // 注意下面临时添加 @SuppressLint("wrongconstant") 以处理 addTestProvider 参数值的 lint 错误
     @SuppressLint("wrongconstant")
-    private void addTestProviderNetwork() {
+    private boolean addTestProviderNetwork() {
         try {
             // 注意，由于 android api 问题，下面的参数会提示错误(以下参数是通过相关API获取的真实NETWORK参数，不是随便写的)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
@@ -372,12 +424,16 @@ public class ServiceGo extends Service {
             if (!mLocManager.isProviderEnabled(LocationManager.NETWORK_PROVIDER)) {
                 mLocManager.setTestProviderEnabled(LocationManager.NETWORK_PROVIDER, true);
             }
+            return true;
         } catch (SecurityException e) {
-            XLog.e("SERVICEGO: ERROR - addTestProviderNetwork");
+            failSimulation("注册网络模拟提供者时权限被撤销，请重新选择模拟位置信息应用", e);
+        } catch (IllegalArgumentException e) {
+            failSimulation("系统拒绝注册网络模拟提供者，模拟已停止", e);
         }
+        return false;
     }
 
-    private void setLocationNetwork() {
+    private boolean setLocationNetwork() {
         try {
             // 尽可能模拟真实的 NETWORK 数据
             Location loc = new Location(LocationManager.NETWORK_PROVIDER);
@@ -391,14 +447,19 @@ public class ServiceGo extends Service {
             loc.setElapsedRealtimeNanos(SystemClock.elapsedRealtimeNanos());
 
             mLocManager.setTestProviderLocation(LocationManager.NETWORK_PROVIDER, loc);
-        } catch (Exception e) {
-            XLog.e("SERVICEGO: ERROR - setLocationNetwork");
+            return true;
+        } catch (SecurityException e) {
+            failSimulation("网络模拟位置权限已撤销，模拟已停止", e);
+        } catch (IllegalArgumentException e) {
+            failSimulation("网络模拟提供者或位置数据已失效，模拟已停止", e);
         }
+        return false;
     }
 
     public class NoteActionReceiver extends BroadcastReceiver {
         @Override
         public void onReceive(Context context, Intent intent) {
+            if (isStop) return;
             String action = intent.getAction();
             if (action != null) {
                 if (action.equals(SERVICE_GO_NOTE_ACTION_JOYSTICK_SHOW)) {
@@ -415,10 +476,11 @@ public class ServiceGo extends Service {
     public class ServiceGoBinder extends Binder {
         public void setPosition(double lng, double lat, double alt) {
             mLocHandler.post(() -> {
-                if (mRouteState == ROUTE_PLAYING || mRouteState == ROUTE_PAUSED) {
-                    return;
-                }
-                clearFinishedRoute();
+                if (isStop) return;
+                // A confirmed map teleport replaces route playback atomically on the position thread.
+                mRoutePlayer = null;
+                mRouteState = ROUTE_NONE;
+                setJoyStickRoutePlaybackActive(false);
                 mCurLng = lng;
                 mCurLat = lat;
                 mCurAlt = alt;
@@ -428,8 +490,14 @@ public class ServiceGo extends Service {
         }
 
         public void startRoute(List<RoutePoint> points, double speed, double altitude) {
-            RoutePlayer player = new RoutePlayer(new RoutePath(new ArrayList<>(points)), speed);
+            startRoute(points, speed, altitude, false);
+        }
+
+        public void startRoute(List<RoutePoint> points, double speed, double altitude, boolean repeat) {
+            RoutePath path = new RoutePath(new ArrayList<>(points));
+            RoutePlayer player = new RoutePlayer(repeat ? path.closed() : path, speed, repeat);
             mLocHandler.post(() -> {
+                if (isStop) return;
                 mRoutePlayer = player;
                 mRouteSpeed = speed;
                 mSpeed = speed;
@@ -447,37 +515,51 @@ public class ServiceGo extends Service {
 
         public void pauseRoute() {
             mLocHandler.post(() -> {
+                if (isStop) return;
                 if (mRouteState == ROUTE_PLAYING) {
                     updateRoutePosition();
                     if (mRouteState == ROUTE_PLAYING) {
                         mSpeed = 0.0;
                         mRouteState = ROUTE_PAUSED;
                     }
+                    publishJoyStickPosition();
                 }
             });
         }
 
         public void resumeRoute() {
             mLocHandler.post(() -> {
+                if (isStop) return;
                 if (mRouteState == ROUTE_PAUSED) {
                     mLastRouteTick = SystemClock.elapsedRealtime();
                     mSpeed = mRouteSpeed;
                     mRouteState = ROUTE_PLAYING;
+                    publishJoyStickPosition();
                 }
             });
         }
 
         public void stopRoute() {
             mLocHandler.post(() -> {
+                if (isStop) return;
                 mRoutePlayer = null;
                 mRouteState = ROUTE_NONE;
                 mSpeed = 0.0;
                 setJoyStickRoutePlaybackActive(false);
+                publishJoyStickPosition();
             });
         }
 
         public int getRouteState() {
             return mRouteState;
+        }
+
+        public RoutePlaybackSnapshot getRouteSnapshot() {
+            return mRouteSnapshot;
+        }
+
+        public String getFailureReason() {
+            return mFailureReason;
         }
     }
 }

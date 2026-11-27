@@ -1,0 +1,9 @@
+<resources>
+    <string name="settings_developer_enable">若开发者选项未显示，请在“关于手机”中连续点击版本号或内部版本号以启用</string>
+    <string name="settings_developer_manual">请在系统设置中搜索“开发者选项”，再选择模拟位置信息应用</string>
+    <string name="settings_location_manual">请在系统设置中搜索“位置”或“定位服务”并开启</string>
+    <string name="settings_overlay_manual">请在应用信息或系统设置中开启影梭的“显示在其他应用上层”权限</string>
+    <string name="settings_overlay_select_app">请选择“影梭”，开启显示在其他应用上层</string>
+    <string name="settings_wifi_manual">请在系统设置中找到 WLAN 或 Wi-Fi</string>
+    <string name="settings_entry_unavailable">系统未提供可打开的设置入口，请手动进入系统设置</string>
+</resources>

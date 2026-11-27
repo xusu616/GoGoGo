@@ -4,6 +4,7 @@
     tools:showIn="navigation_view">
 
     <group>
+        <item android:id="@+id/nav_map" android:icon="@drawable/ic_position" android:title="@string/nav_map" />
         <item
             android:id="@+id/nav_history"
             android:icon="@drawable/ic_menu_history"
@@ -13,6 +14,8 @@
     <group>
         <item android:title="@string/nav_menu_settings">
             <menu>
+                <item
+                    android:id="@+id/nav_ui_settings" android:icon="@drawable/ic_menu_settings" android:title="@string/ui_settings" />
                 <item
                     android:id="@+id/nav_settings"
                     android:icon="@drawable/ic_menu_settings"

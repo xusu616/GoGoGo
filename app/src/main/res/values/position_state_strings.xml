@@ -1,0 +1,3 @@
+<resources>
+    <string name="position_waiting_for_service">正在连接模拟服务，连接后传送到所选位置</string>
+</resources>

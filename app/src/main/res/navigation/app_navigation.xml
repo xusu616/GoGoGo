@@ -1,0 +1,7 @@
+<navigation xmlns:android="http://schemas.android.com/apk/res/android" xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:id="@+id/app_navigation" app:startDestination="@id/map_destination">
+    <fragment android:id="@+id/map_destination" android:name="com.suku616miao.meow.miaowuwu.ui.MapDestinationFragment" android:label="@string/app_name" />
+    <fragment android:id="@+id/settings_destination" android:name="com.suku616miao.meow.miaowuwu.FragmentSettings" android:label="@string/app_settings" />
+    <fragment android:id="@+id/ui_settings_destination" android:name="com.suku616miao.meow.miaowuwu.ui.UiSettingsFragment" android:label="@string/ui_settings" />
+    <fragment android:id="@+id/history_destination" android:name="com.suku616miao.meow.miaowuwu.ui.HistoryFragment" android:label="@string/app_history" />
+</navigation>

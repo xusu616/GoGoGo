@@ -51,22 +51,17 @@
         android:name=".GoApplication"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
-        android:launchMode="singleInstance"
+        android:launchMode="singleTop"
         android:requestLegacyExternalStorage="true"
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:theme="@style/AppTheme">
 
+        <meta-data android:name="com.baidu.lbsapi.API_KEY" android:value="${MAPS_API_KEY}" />
+
         <uses-library
             android:name="org.apache.http.legacy"
             android:required="false" />
-
-        <!-- 百度地图 间隔定位必须配置此service否则功能无效 -->
-        <service
-            android:name="com.baidu.location.f"
-            android:enabled="true"
-            android:exported="false"
-            android:process=":remote" />
 
         <service
             android:exported="false"
@@ -83,31 +78,13 @@
         </provider>
 
         <activity
-            android:name=".WelcomeActivity"
-            android:exported="true"
-            android:theme="@style/AppTheme.NoActionBar"
-            >
-            <intent-filter>
-                <action android:name="android.intent.action.MAIN" />
-                <category android:name="android.intent.category.LAUNCHER" />
-            </intent-filter>
-        </activity>
-
-        <activity
             android:name=".MainActivity"
-            android:launchMode="singleInstance"
-            android:exported="false"
-            android:theme="@style/AppTheme.NoActionBar" />
-
-        <activity
-            android:name=".SettingsActivity"
-            android:label="@string/app_settings"
-            android:exported="false" />
-
-        <activity
-            android:name=".HistoryActivity"
-            android:label="@string/app_history"
-            android:exported="false" />
+            android:launchMode="singleTop"
+            android:exported="true"
+            android:enableOnBackInvokedCallback="true"
+            android:theme="@style/AppTheme.NoActionBar">
+            <intent-filter><action android:name="android.intent.action.MAIN" /><category android:name="android.intent.category.LAUNCHER" /></intent-filter>
+        </activity>
 
     </application>
 

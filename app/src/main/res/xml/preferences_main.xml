@@ -49,7 +49,7 @@
         app:title="@string/setting_group_location_offset"
         app:iconSpaceReserved="false">
 
-        <SwitchPreferenceCompat
+        <com.suku616miao.meow.miaowuwu.ui.MaterialSwitchPreference
             app:key="setting_random_offset"
             app:title="@string/setting_random_offset"
             app:summary="@string/setting_random_offset_summary"
@@ -73,10 +73,13 @@
         app:title="@string/setting_group_log"
         app:iconSpaceReserved="false">
 
-        <SwitchPreferenceCompat
-            app:key="setting_log_off"
-            app:title="@string/setting_log_off"
-            app:defaultValue="false"
+        <ListPreference
+            app:key="setting_log_level"
+            app:title="@string/setting_log_level"
+            app:entries="@array/setting_log_level_entries"
+            app:entryValues="@array/setting_log_level_values"
+            app:defaultValue="all"
+            app:useSimpleSummaryProvider="true"
             app:iconSpaceReserved="false"/>
         <EditTextPreference
             app:key="setting_history_expiration"

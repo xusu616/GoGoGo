@@ -15,19 +15,22 @@
             android:layout_height="wrap_content"
             android:theme="@style/AppTheme.AppBarOverlay">
 
-            <androidx.appcompat.widget.Toolbar
+            <com.google.android.material.appbar.MaterialToolbar
                 android:id="@+id/toolbar"
                 android:layout_width="match_parent"
                 android:layout_height="?attr/actionBarSize"
-                android:background="@color/colorPrimary"
+                android:background="?attr/colorSurface"
+                app:titleTextColor="?attr/colorOnSurface"
+                app:navigationIconTint="?attr/colorOnSurface"
                 app:popupTheme="@style/AppTheme.PopupOverlay" />
 
         </com.google.android.material.appbar.AppBarLayout>
 
         <include
+            android:id="@+id/map_content"
             layout="@layout/main_map"
             android:layout_width="match_parent"
-            android:layout_height="wrap_content"
+            android:layout_height="match_parent"
             android:layout_marginTop="?attr/actionBarSize" />
 
         <com.google.android.material.floatingactionbutton.FloatingActionButton
@@ -35,12 +38,19 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_gravity="bottom|start"
-            android:layout_marginStart="30dp"
-            android:layout_marginBottom="80dp"
-            android:contentDescription="@null"
+            android:layout_marginStart="24dp"
+            android:layout_marginBottom="32dp"
+            android:contentDescription="@string/cur_position"
+            app:shapeAppearanceOverlay="@style/ShapeAppearance.App.Circle"
             app:elevation="6dp"
             app:pressedTranslationZ="12dp"
             app:srcCompat="@drawable/ic_position" />
+
+        <com.google.android.material.floatingactionbutton.FloatingActionButton
+            android:id="@+id/route_button" android:layout_width="wrap_content" android:layout_height="wrap_content"
+            android:layout_gravity="bottom|end" android:layout_marginEnd="24dp" android:layout_marginBottom="32dp"
+            android:contentDescription="@string/route_menu" app:srcCompat="@drawable/ic_route"
+            app:shapeAppearanceOverlay="@style/ShapeAppearance.App.Circle" />
 
         <LinearLayout
             android:id="@+id/search_linear"
@@ -73,11 +83,31 @@
         </LinearLayout>
 
         <include
+            android:id="@+id/route_panel"
             layout="@layout/route_panel"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_gravity="bottom"
-            android:layout_marginBottom="20dp" />
+            android:visibility="gone"
+            android:layout_marginStart="12dp" android:layout_marginEnd="12dp"
+            android:layout_marginBottom="16dp" />
+
+        <FrameLayout android:id="@+id/nav_viewport"
+            android:layout_width="match_parent" android:layout_height="match_parent"
+            android:layout_marginTop="?attr/actionBarSize" android:clipChildren="true"
+            android:clipToPadding="true" android:visibility="gone">
+            <View android:id="@+id/nav_backdrop"
+                android:layout_width="match_parent" android:layout_height="match_parent"
+                android:background="#000000" android:visibility="gone"
+                android:importantForAccessibility="no" />
+
+            <com.suku616miao.meow.miaowuwu.ui.MovingPageLayout android:id="@+id/nav_page"
+                android:layout_width="match_parent" android:layout_height="match_parent"
+                android:background="?attr/colorSurface" android:visibility="gone">
+                <androidx.fragment.app.FragmentContainerView android:id="@+id/nav_container"
+                    android:layout_width="match_parent" android:layout_height="match_parent" />
+            </com.suku616miao.meow.miaowuwu.ui.MovingPageLayout>
+        </FrameLayout>
 
     </FrameLayout>
 </androidx.coordinatorlayout.widget.CoordinatorLayout>

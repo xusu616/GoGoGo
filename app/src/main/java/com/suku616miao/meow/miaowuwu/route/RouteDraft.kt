@@ -13,8 +13,9 @@ class RouteDraft {
 
     fun beginMapMove() {
         isMapMoving = true
-        candidate = null
     }
+
+    fun updateCandidate(point: RoutePoint) { candidate = point }
 
     fun finishMapMove(point: RoutePoint) {
         candidate = point
@@ -24,9 +25,8 @@ class RouteDraft {
     fun confirmCandidate(): Boolean {
         val point = candidate ?: return false
         val previous = confirmedPoints.lastOrNull()
-        val samePosition = previous != null && previous.latitude == point.latitude &&
-            ((previous.longitude - point.longitude) % 360.0 == 0.0 || kotlin.math.abs(point.latitude) == 90.0)
-        if (isMapMoving || samePosition) return false
+        val samePosition = previous?.isSamePosition(point) == true
+        if (samePosition) return false
         confirmedPoints.add(point)
         return true
     }

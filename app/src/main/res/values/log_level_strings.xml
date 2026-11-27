@@ -1,0 +1,19 @@
+<resources>
+    <string name="setting_log_level">日志等级</string>
+    <string-array name="setting_log_level_entries">
+        <item>全部（当前默认）</item>
+        <item>Debug · 调试及以上</item>
+        <item>Info · 信息及以上</item>
+        <item>Warn · 警告及以上</item>
+        <item>Error · 仅错误</item>
+        <item>Silent · 关闭应用日志</item>
+    </string-array>
+    <string-array name="setting_log_level_values" translatable="false">
+        <item>all</item>
+        <item>debug</item>
+        <item>info</item>
+        <item>warn</item>
+        <item>error</item>
+        <item>silent</item>
+    </string-array>
+</resources>
